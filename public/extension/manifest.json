@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "AutoVideo Flow Extension",
+  "version": "0.0.4",
+  "description": "Local bridge that proxies AutoVideo.AI requests to authenticated labs.google sessions.",
+  "permissions": ["storage", "alarms", "tabs", "webRequest", "scripting", "declarativeNetRequest"],
+  "host_permissions": [
+    "https://aisandbox-pa.googleapis.com/*",
+    "https://labs.google/*",
+    "http://127.0.0.1:9222/*",
+    "http://localhost:9222/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ruleset_1",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  }
+}
