@@ -318,6 +318,7 @@ class FlowBridge {
     const body = {
       clientContext: {
         clientId: 'FLOW',
+        projectId,
         projectTitle: this.currentProjectTitle,
         recaptchaContext: { token: '' } // solved by extension
       },
@@ -325,56 +326,58 @@ class FlowBridge {
       useNewMedia: true,
       requests: [
         {
-          clientContext: {
-            clientId: 'FLOW',
-            projectTitle: this.currentProjectTitle,
-            sessionId: `;${Date.now()}`
-          },
           seed,
           structuredPrompt: {
             parts: [{ text: prompt }]
           },
-          imageAspectRatio: 'IMAGE_ASPECT_RATIO_SQUARE', // 1:1 format
-          imageModelName: 'GEM_PIX_2' // Nano Banana Pro
+          imageAspectRatio: 'IMAGE_ASPECT_RATIO_LANDSCAPE', // 16:9 — Flow requires LANDSCAPE not SQUARE
+          imageModelName: 'GEM_PIX_2'
         }
       ]
     };
 
-    // Propagation delay: Sleep for 2.5 seconds to let Google Flow register the new project ID
+    // Propagation delay: Sleep for 2.5s to let Google Flow register the new project ID
     console.log(`[FlowBridge] Waiting 2.5s for project registration to propagate...`);
     await new Promise((resolve) => setTimeout(resolve, 2500));
 
     let attempts = 0;
-    const maxAttempts = 3;
+    const maxAttempts = 4;
 
     while (attempts < maxAttempts) {
       try {
-        console.log(`[FlowBridge] Requesting image gen for prompt: "${prompt.substring(0, 40)}..." (Attempt ${attempts + 1}/${maxAttempts})`);
+        console.log(`[FlowBridge] Requesting image gen: "${prompt.substring(0, 50)}..." (Attempt ${attempts + 1}/${maxAttempts})`);
         const resp = await this.apiRequest(url, 'POST', {}, body, 'IMAGE_GENERATION');
         
+        console.log('[FlowBridge] genImage raw response:', JSON.stringify(resp)?.substring(0, 300));
+
         // Extract media ID and url
         const media = resp?.media?.[0];
         const mediaId = media?.name;
         const fifeUrl = media?.image?.generatedImage?.fifeUrl;
 
         if (!mediaId || !fifeUrl) {
-          throw new Error(`Tạo ảnh thất bại. Phản hồi từ Google: ${JSON.stringify(resp?.error || resp)}`);
+          throw new Error(`Tạo ảnh thất bại. Google trả về: ${JSON.stringify(resp?.error || resp).substring(0, 200)}`);
         }
 
         return { mediaId, url: fifeUrl };
       } catch (err: any) {
         attempts++;
-        const is404 = err.message?.includes('HTTP_404') || err.message?.includes('API_404');
-        if (is404 && attempts < maxAttempts) {
-          console.warn(`[FlowBridge] Google returned 404 (Project not propagated). Retrying in 3 seconds...`);
-          await new Promise((resolve) => setTimeout(resolve, 3000));
+        const isRetryable =
+          err.message?.includes('HTTP_404') ||
+          err.message?.includes('API_404') ||
+          err.message?.includes('HTTP_400') ||
+          err.message?.includes('API_400');
+        if (isRetryable && attempts < maxAttempts) {
+          const delay = attempts * 3000; // exponential: 3s, 6s, 9s
+          console.warn(`[FlowBridge] Retryable error (${err.message?.substring(0, 60)}). Retrying in ${delay / 1000}s...`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
         } else {
           throw err;
         }
       }
     }
 
-    throw new Error('Tạo ảnh trên Google Flow thất bại sau nhiều lần thử lại do lỗi 404.');
+    throw new Error('Tạo ảnh trên Google Flow thất bại sau nhiều lần thử.');
   }
 
   public async genVideo(prompt: string, projectId: string, startMediaId: string, modelName = 'veo-3'): Promise<string> {
@@ -383,19 +386,20 @@ class FlowBridge {
     const sceneId = crypto.randomUUID();
     const seed = Math.floor(Math.random() * 1000000);
 
-    // Map model selection. Note: Google Flow natively runs Veo 3.1 for video workspace (veo_3_1_i2v_s_fast)
-    const videoModelKey = modelName === 'omni' ? 'veo_3_1_i2v_s_fast' : 'veo_3_1_i2v_s_fast';
+    // Both Veo 3.1 variants use the same key in Flow
+    const videoModelKey = 'veo_3_1_i2v_s_fast';
 
     const body = {
       clientContext: {
         clientId: 'FLOW',
+        projectId,
         projectTitle: this.currentProjectTitle,
         recaptchaContext: { token: '' } // solved by extension
       },
       mediaGenerationContext: { batchId },
       requests: [
         {
-          aspectRatio: 'VIDEO_ASPECT_RATIO_LANDSCAPE', // 16:9 format
+          aspectRatio: 'VIDEO_ASPECT_RATIO_LANDSCAPE', // 16:9
           seed,
           textInput: {
             structuredPrompt: {
@@ -410,13 +414,15 @@ class FlowBridge {
       useV2ModelConfig: true
     };
 
-    console.log(`[FlowBridge] Triggering video clip generation (${modelName} via model key ${videoModelKey}) using image mediaId: ${startMediaId}...`);
+    console.log(`[FlowBridge] Triggering video clip (${videoModelKey}) using image mediaId: ${startMediaId}...`);
     const resp = await this.apiRequest(url, 'POST', {}, body, 'VIDEO_GENERATION');
+
+    console.log('[FlowBridge] genVideo raw response:', JSON.stringify(resp)?.substring(0, 300));
 
     // Extract operation name
     const opName = resp?.operations?.[0]?.operation?.name || resp?.operations?.[0]?.name;
     if (!opName) {
-      throw new Error(`Không tạo được operation sinh video. Lỗi Google: ${JSON.stringify(resp?.error || resp)}`);
+      throw new Error(`Không tạo được operation sinh video. Google trả về: ${JSON.stringify(resp?.error || resp).substring(0, 200)}`);
     }
 
     return opName;
