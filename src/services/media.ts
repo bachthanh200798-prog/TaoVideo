@@ -1,15 +1,17 @@
 import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
-import { exec, execSync } from 'child_process';
-import { promisify } from 'util';
+import { execSync } from 'child_process';
 import { GoogleGenAI } from '@google/genai';
-
-const execPromise = promisify(exec);
+import { runCommand } from './process';
 
 let cachedDrawtextSupported: boolean | null = null;
 function checkDrawtextSupport(): boolean {
   if (cachedDrawtextSupported !== null) return cachedDrawtextSupported;
+  if (process.platform === 'win32') {
+    cachedDrawtextSupported = false;
+    return cachedDrawtextSupported;
+  }
   try {
     const stdout = execSync('ffmpeg -filters', { stdio: ['pipe', 'pipe', 'ignore'] }).toString();
     cachedDrawtextSupported = stdout.includes('drawtext');
@@ -32,6 +34,44 @@ export interface ElevenLabsVoice {
   name: string;
   category: string;
   preview_url: string;
+}
+
+async function getAudioDurationSeconds(audioPath: string): Promise<number> {
+  const { stdout } = await runCommand('ffprobe', [
+    '-v', 'error',
+    '-show_entries', 'format=duration',
+    '-of', 'default=noprint_wrappers=1:nokey=1',
+    audioPath,
+  ]);
+  return parseFloat(stdout.trim()) || 5.0;
+}
+
+async function generateLocalSpeech(text: string, voiceId: string, outputPath: string): Promise<void> {
+  const tempPath = outputPath.replace('.mp3', process.platform === 'win32' ? '.wav' : '.aiff');
+
+  if (process.platform === 'darwin') {
+    const macVoice = voiceId === 'macos-lan' ? 'Lan' : 'Linh';
+    await runCommand('say', ['-v', macVoice, '-o', tempPath, text]);
+  } else if (process.platform === 'win32') {
+    const psScript = `
+Add-Type -AssemblyName System.Speech
+$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$voice = $synth.GetInstalledVoices() | Where-Object { $_.VoiceInfo.Culture.Name -like 'vi-*' } | Select-Object -First 1
+if ($voice) { $synth.SelectVoice($voice.VoiceInfo.Name) }
+$synth.SetOutputToWaveFile('${tempPath.replace(/'/g, "''")}')
+$synth.Speak('${text.replace(/'/g, "''")}')
+$synth.Dispose()
+`;
+    await runCommand('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psScript]);
+  } else {
+    throw new Error(`Local TTS is not supported on ${process.platform}`);
+  }
+
+  await runCommand('ffmpeg', ['-y', '-i', tempPath, '-codec:a', 'libmp3lame', '-qscale:a', '2', outputPath]);
+
+  if (fs.existsSync(tempPath)) {
+    fs.unlinkSync(tempPath);
+  }
 }
 
 export const MediaService = {
@@ -60,6 +100,7 @@ export const MediaService = {
 
     // Fallback/Mock list of voices (including macOS native voices)
     return [
+      { voice_id: 'local-vietnamese', name: 'Vietnamese Local Voice', category: 'local', preview_url: '' },
       { voice_id: 'macos-linh', name: 'Linh (macOS Vietnamese Female)', category: 'local', preview_url: '' },
       { voice_id: 'macos-lan', name: 'Lan (macOS Vietnamese Female)', category: 'local', preview_url: '' },
       { voice_id: 'eleven-rachel', name: 'Rachel (ElevenLabs standard)', category: 'premade', preview_url: 'https://api.elevenlabs.io/v1/voices/21m00Tcm4TlvDq8ikWAM/previews' },
@@ -89,27 +130,8 @@ export const MediaService = {
     if (useLocalTTS) {
       console.log(`Using macOS local speech synthesis for Vietnamese: "${text.substring(0, 30)}..."`);
       try {
-        // AIFF temporary file path
-        const tempAiffPath = outputPath.replace('.mp3', '.aiff');
-        
-        // Select macOS voice (default to Linh for Vietnamese)
-        let macVoice = 'Linh';
-        if (voiceId === 'macos-lan') macVoice = 'Lan';
-
-        // Run 'say' command on Mac
-        await execPromise(`say -v ${macVoice} -o "${tempAiffPath}" "${text.replace(/"/g, '\\"')}"`);
-        
-        // Convert AIFF to MP3 using local FFmpeg
-        await execPromise(`ffmpeg -y -i "${tempAiffPath}" -codec:a libmp3lame -qscale:a 2 "${outputPath}"`);
-        
-        // Clean up temporary AIFF file
-        if (fs.existsSync(tempAiffPath)) {
-          fs.unlinkSync(tempAiffPath);
-        }
-
-        // Get duration using ffprobe
-        const { stdout } = await execPromise(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${outputPath}"`);
-        const duration = parseFloat(stdout.trim()) || 5.0;
+        await generateLocalSpeech(text, voiceId, outputPath);
+        const duration = await getAudioDurationSeconds(outputPath);
 
         return { audioPath: outputPath, durationSeconds: duration };
       } catch (err: any) {
@@ -137,8 +159,7 @@ export const MediaService = {
       fs.writeFileSync(outputPath, response.data);
 
       // Get duration via ffprobe
-      const { stdout } = await execPromise(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${outputPath}"`);
-      const duration = parseFloat(stdout.trim()) || 5.0;
+      const duration = await getAudioDurationSeconds(outputPath);
 
       return { audioPath: outputPath, durationSeconds: duration };
     } catch (err: any) {
@@ -224,23 +245,24 @@ export const MediaService = {
     try {
       const randomColor = ['0x1a1a2e', '0x16213e', '0x0f3460', '0x1f4068', '0x321f28'][Math.floor(Math.random() * 5)];
       
-      let cmd = '';
       if (hasDrawtext) {
         const textContent = `Banana Pro Image Placeholder\n\nPrompt: ${prompt.substring(0, 120)}...`;
         fs.writeFileSync(tempTextPath, textContent);
-        cmd = `ffmpeg -y -f lavfi -i color=c=${randomColor}:s=1024x1024:d=1 -vf "drawtext=textfile='${tempTextPath}':fontcolor=white:fontsize=36:x=(w-text_w)/2:y=(h-text_h)/2" -vframes 1 "${outputPath}"`;
+        const filter = `drawtext=textfile='${tempTextPath.replace(/\\/g, '/').replace(/:/g, '\\:')}':fontcolor=white:fontsize=36:x=(w-text_w)/2:y=(h-text_h)/2`;
+        try {
+          await runCommand('ffmpeg', ['-y', '-f', 'lavfi', '-i', `color=c=${randomColor}:s=1024x1024:d=1`, '-vf', filter, '-frames:v', '1', outputPath]);
+        } catch (drawtextErr) {
+          console.warn('FFmpeg drawtext placeholder failed, rendering plain placeholder:', drawtextErr);
+          await runCommand('ffmpeg', ['-y', '-f', 'lavfi', '-i', `color=c=${randomColor}:s=1024x1024:d=1`, '-frames:v', '1', outputPath]);
+        }
       } else {
         // Plain solid color fallback without drawtext
-        cmd = `ffmpeg -y -f lavfi -i color=c=${randomColor}:s=1024x1024:d=1 -vframes 1 "${outputPath}"`;
+        await runCommand('ffmpeg', ['-y', '-f', 'lavfi', '-i', `color=c=${randomColor}:s=1024x1024:d=1`, '-frames:v', '1', outputPath]);
       }
-      
-      await execPromise(cmd);
       return outputPath;
     } catch (err) {
       console.error('Failed to render local image placeholder:', err);
-      // Create empty file
-      fs.writeFileSync(outputPath, '');
-      return outputPath;
+      throw new Error('Could not render a local placeholder image. Please verify FFmpeg is installed and writable output paths are available.');
     } finally {
       if (fs.existsSync(tempTextPath)) {
         try {
@@ -303,8 +325,16 @@ export const MediaService = {
       await this.generateImage(`Video scene showing: ${prompt}`, tempImgPath, bananaKey, bananaUrlOverride);
       
       // Render a zooming pan clip of 4 seconds from the image using FFmpeg
-      const cmd = `ffmpeg -y -loop 1 -i "${tempImgPath}" -vf "scale=1920:1080,zoompan=z='zoom+0.001':d=100:s=1920x1080" -c:v libx264 -t 4 -pix_fmt yuv420p "${outputPath}"`;
-      await execPromise(cmd);
+      await runCommand('ffmpeg', [
+        '-y',
+        '-loop', '1',
+        '-i', tempImgPath,
+        '-vf', "scale=1920:1080,zoompan=z='zoom+0.001':d=100:s=1920x1080",
+        '-c:v', 'libx264',
+        '-t', '4',
+        '-pix_fmt', 'yuv420p',
+        outputPath,
+      ]);
       
       if (fs.existsSync(tempImgPath)) {
         fs.unlinkSync(tempImgPath);
@@ -320,9 +350,9 @@ export const MediaService = {
   // Helper to generate a 5-second silence MP3
   async generateMockAudio(outputPath: string): Promise<{ audioPath: string; durationSeconds: number }> {
     try {
-      await execPromise(`ffmpeg -y -f lavfi -i anullsrc=r=44100:cl=stereo -t 5 -qscale:a 9 -codec:a libmp3lame "${outputPath}"`);
+      await runCommand('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo', '-t', '5', '-qscale:a', '9', '-codec:a', 'libmp3lame', outputPath]);
       return { audioPath: outputPath, durationSeconds: 5.0 };
-    } catch (err) {
+    } catch {
       fs.writeFileSync(outputPath, '');
       return { audioPath: outputPath, durationSeconds: 5.0 };
     }
