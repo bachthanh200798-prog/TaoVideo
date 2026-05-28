@@ -25,6 +25,21 @@ interface ElevenLabsVoice {
   preview_url: string;
 }
 
+interface FlowBridgeStats {
+  connected: boolean;
+  flowKeyPresent: boolean;
+  tokenAgeS: number | null;
+  pendingRequests: number;
+  requestCount: number;
+  successCount: number;
+  failedCount: number;
+  lastError: string | null;
+  userInfo: {
+    email?: string;
+    name?: string;
+  } | null;
+}
+
 export default function Home() {
   // Tab control state
   const [activeTab, setActiveTab] = useState<'direct' | 'competitor'>('direct');
@@ -52,7 +67,7 @@ export default function Home() {
     return false;
   });
   const [extensionConnected, setExtensionConnected] = useState(false);
-  const [extensionStats, setExtensionStats] = useState<any>(null);
+  const [extensionStats, setExtensionStats] = useState<FlowBridgeStats | null>(null);
 
   // Input fields state
   const [productName, setProductName] = useState('');
@@ -66,8 +81,8 @@ export default function Home() {
     return true;
   });
   const [localVoice, setLocalVoice] = useState(() => {
-    if (typeof window !== 'undefined') return localStorage.getItem('local_voice') || 'macos-linh';
-    return 'macos-linh';
+    if (typeof window !== 'undefined') return localStorage.getItem('local_voice') || 'local-vietnamese';
+    return 'local-vietnamese';
   });
   const [voices, setVoices] = useState<ElevenLabsVoice[]>([]);
   const [selectedVoice, setSelectedVoice] = useState('macos-linh');
@@ -135,7 +150,7 @@ export default function Home() {
           setExtensionConnected(false);
           setExtensionStats(null);
         }
-      } catch (err) {
+      } catch {
         setExtensionConnected(false);
         setExtensionStats(null);
       }
@@ -492,7 +507,7 @@ export default function Home() {
                     </div>
                   ) : (
                     <div className="form-group" style={{ margin: 0 }}>
-                      <label htmlFor="select-local-voice" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Chọn giọng máy macOS nội bộ (Miễn phí)</label>
+                      <label htmlFor="select-local-voice" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Chọn giọng máy nội bộ (Miễn phí)</label>
                       <select
                         id="select-local-voice"
                         className="form-input"
@@ -503,6 +518,7 @@ export default function Home() {
                           localStorage.setItem('local_voice', val);
                         }}
                       >
+                        <option value="local-vietnamese">Giọng Tiếng Việt nội bộ của hệ điều hành</option>
                         <option value="macos-linh">Linh (Giọng máy macOS Tiếng Việt Nữ)</option>
                         <option value="macos-lan">Lan (Giọng máy macOS Tiếng Việt Nữ)</option>
                       </select>
@@ -605,6 +621,35 @@ export default function Home() {
                         ○ Không phụ đề
                       </span>
                     )}
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label>Định dạng hình ảnh đầu ra</label>
+                  <div className="radio-group">
+                    <div
+                      id="opt-visual-video"
+                      className={`radio-card ${visualMode === 'video' ? 'active' : ''}`}
+                      onClick={() => setVisualMode('video')}
+                    >
+                      <span>🎞️</span>
+                      <div>
+                        <strong style={{ display: 'block', fontSize: '0.9rem' }}>Video clip</strong>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Sinh clip ngắn cho từng cảnh</span>
+                      </div>
+                    </div>
+
+                    <div
+                      id="opt-visual-images"
+                      className={`radio-card ${visualMode === 'images' ? 'active' : ''}`}
+                      onClick={() => setVisualMode('images')}
+                    >
+                      <span>🖼️</span>
+                      <div>
+                        <strong style={{ display: 'block', fontSize: '0.9rem' }}>Ảnh tĩnh</strong>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Tạo ảnh rồi pan/zoom bằng FFmpeg</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
 

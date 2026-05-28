@@ -1,12 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ScraperService } from '@/services/scraper';
 import { GeminiService } from '@/services/gemini';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { runCommand } from '@/services/process';
 import * as fs from 'fs';
 import * as path from 'path';
-
-const execPromise = promisify(exec);
 
 export const maxDuration = 300; // Allow long runtime (5 minutes) for downloads and API calls
 
@@ -51,7 +48,7 @@ export async function POST(req: NextRequest) {
       
       try {
         // Extract audio from uploaded video
-        await execPromise(`ffmpeg -y -i "${tempVideoPath}" -q:a 2 -map a "${competitorAudioPath}"`);
+        await runCommand('ffmpeg', ['-y', '-i', tempVideoPath, '-q:a', '2', '-map', 'a', competitorAudioPath]);
       } catch (ffmpegErr: any) {
         console.error('Failed to extract audio from video file:', ffmpegErr);
         throw new Error('Could not extract audio from uploaded competitor video.');
@@ -64,15 +61,17 @@ export async function POST(req: NextRequest) {
       competitorAudioPath = path.join(tempDir, `competitor_audio_${Date.now()}.mp3`);
       
       try {
-        // Use yt-dlp to download only audio track as MP3
-        // -x: extract audio, --audio-format: mp3, -o: output template
-        await execPromise(`yt-dlp -x --audio-format mp3 -o "${competitorAudioPath.replace('.mp3', '.%(ext)s')}" "${competitorUrl}"`);
+        const outputTemplate = competitorAudioPath.replace('.mp3', '.%(ext)s');
+        const expectedPrefix = path.basename(competitorAudioPath, '.mp3');
+
+        // Use yt-dlp to download only audio track as MP3.
+        await runCommand('yt-dlp', ['-x', '--audio-format', 'mp3', '-o', outputTemplate, competitorUrl]);
         
         // yt-dlp might append extension based on format, so let's verify file path
         if (!fs.existsSync(competitorAudioPath)) {
           // Find any file starting with competitor_audio_ and ending with .mp3
           const files = fs.readdirSync(tempDir);
-          const foundFile = files.find(f => f.startsWith('competitor_audio_') && f.endsWith('.mp3'));
+          const foundFile = files.find(f => f.startsWith(expectedPrefix) && f.endsWith('.mp3'));
           if (foundFile) {
             competitorAudioPath = path.join(tempDir, foundFile);
           } else {

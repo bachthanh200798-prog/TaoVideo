@@ -89,7 +89,7 @@ class FlowBridge {
             const resolved = this.resolveCallback(data);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ ok: resolved }));
-          } catch (e: any) {
+          } catch {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'invalid json' }));
           }
@@ -178,7 +178,7 @@ class FlowBridge {
     this.userInfo = null;
     
     // Reject all pending requests
-    for (const [id, req] of this.pendingRequests.entries()) {
+    for (const req of this.pendingRequests.values()) {
       clearTimeout(req.timeoutTimer);
       req.reject(new Error('extension_disconnected'));
     }

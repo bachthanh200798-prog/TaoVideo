@@ -1,18 +1,20 @@
-import { exec, execSync } from 'child_process';
+import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { promisify } from 'util';
-
-const execPromise = promisify(exec);
+import { runCommand } from './process';
 
 let cachedDrawtextSupported: boolean | null = null;
 
 function checkDrawtextSupport(): boolean {
   if (cachedDrawtextSupported !== null) return cachedDrawtextSupported;
+  if (process.platform === 'win32') {
+    cachedDrawtextSupported = false;
+    return cachedDrawtextSupported;
+  }
   try {
     const stdout = execSync('ffmpeg -filters', { stdio: ['pipe', 'pipe', 'ignore'] }).toString();
     cachedDrawtextSupported = stdout.includes('drawtext');
-  } catch (err) {
+  } catch {
     cachedDrawtextSupported = false;
   }
   return cachedDrawtextSupported;
@@ -69,25 +71,47 @@ export const FfmpegService = {
         }
 
         // Build FFmpeg command for compiling this scene
-        let cmd = '';
-
         if (isVideo) {
           // Visual asset is a video clip: Loop it and truncate at audio end
           // -vf scale=1920:1080 scaling to standard Full HD
           const filterChain = hasDrawtext
             ? `scale=1920:1080,drawtext=textfile='${escapedTextFilePath}':expansion=none:fontcolor=white:fontsize=48:box=1:boxcolor=black@0.5:boxborderw=20:x=(w-text_w)/2:y=h-180`
             : `scale=1920:1080`;
-          cmd = `ffmpeg -y -stream_loop -1 -i "${scene.visualPath}" -i "${scene.audioPath}" -vf "${filterChain}" -c:v libx264 -c:a aac -b:a 192k -shortest "${tempScenePath}"`;
+          await runCommand('ffmpeg', [
+            '-y',
+            '-stream_loop', '-1',
+            '-i', scene.visualPath,
+            '-i', scene.audioPath,
+            '-vf', filterChain,
+            '-c:v', 'libx264',
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            '-shortest',
+            tempScenePath,
+          ]);
         } else {
           // Visual asset is a static image: Loop image for exact audio duration
           const filterChain = hasDrawtext
             ? `scale=1920:1080,zoompan=z='zoom+0.0005':d=${Math.ceil(scene.durationSeconds * 25)}:s=1920x1080,drawtext=textfile='${escapedTextFilePath}':expansion=none:fontcolor=white:fontsize=48:box=1:boxcolor=black@0.5:boxborderw=20:x=(w-text_w)/2:y=h-180`
             : `scale=1920:1080,zoompan=z='zoom+0.0005':d=${Math.ceil(scene.durationSeconds * 25)}:s=1920x1080`;
-          cmd = `ffmpeg -y -loop 1 -i "${scene.visualPath}" -i "${scene.audioPath}" -vf "${filterChain}" -c:v libx264 -tune stillimage -c:a aac -b:a 192k -shortest -pix_fmt yuv420p -t ${scene.durationSeconds} "${tempScenePath}"`;
+          await runCommand('ffmpeg', [
+            '-y',
+            '-loop', '1',
+            '-i', scene.visualPath,
+            '-i', scene.audioPath,
+            '-vf', filterChain,
+            '-c:v', 'libx264',
+            '-tune', 'stillimage',
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            '-shortest',
+            '-pix_fmt', 'yuv420p',
+            '-t', String(scene.durationSeconds),
+            tempScenePath,
+          ]);
         }
 
         console.log(`Compiling Scene ${scene.sceneNumber}...`);
-        await execPromise(cmd);
         tempScenePaths.push(tempScenePath);
       }
 
@@ -101,8 +125,7 @@ export const FfmpegService = {
 
       // Stage 3: Concatenate scenes into final MP4
       console.log('Concatenating scenes into final video...');
-      const concatCmd = `ffmpeg -y -f concat -safe 0 -i "${concatListPath}" -c copy "${finalOutputPath}"`;
-      await execPromise(concatCmd);
+      await runCommand('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', concatListPath, '-c', 'copy', finalOutputPath]);
 
       // Clean up temporary files
       try {
