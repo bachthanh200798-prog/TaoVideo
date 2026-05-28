@@ -214,10 +214,21 @@ class FlowBridge {
 
     if (httpError || explicitError) {
       this.failedCount++;
+      
+      // Extract Google's API error message if available in response data
+      const googleErrorMsg = data.data?.error?.message || 
+                            (data.data?.error ? JSON.stringify(data.data.error) : null) ||
+                            (data.data ? (typeof data.data === 'object' ? JSON.stringify(data.data) : String(data.data)) : null);
+
+      if (googleErrorMsg) {
+        console.error(`[FlowBridge] Google API returned error status ${data.status}:`, googleErrorMsg);
+      }
+
       if (data.status === 401) {
         this.lastError = 'HTTP_401 (Unauthorized). Vui lòng F5 (tải lại trang) tab labs.google/fx/tools/flow trên Chrome để làm mới phiên đăng nhập và cập nhật token.';
       } else {
-        const errorMsg = data.error || `HTTP_${data.status}`;
+        const detail = googleErrorMsg ? `: ${googleErrorMsg}` : '';
+        const errorMsg = data.error || `HTTP_${data.status}${detail}`;
         this.lastError = typeof errorMsg === 'object' ? JSON.stringify(errorMsg) : String(errorMsg);
       }
       req.reject(new Error(this.lastError || 'API error'));
