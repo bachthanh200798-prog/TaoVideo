@@ -273,6 +273,7 @@ class FlowBridge {
   }
 
   public apiRequest(url: string, method = 'POST', headers: any = {}, body: any = null, captchaAction?: string): Promise<any> {
+    console.log(`[FlowBridge] API Request to ${url} with body:`, JSON.stringify(body));
     const params: any = {
       url,
       method,
@@ -426,8 +427,9 @@ class FlowBridge {
 
     console.log('[FlowBridge] genVideo raw response:', JSON.stringify(resp)?.substring(0, 300));
 
-    // Extract operation name
-    const opName = resp?.operations?.[0]?.operation?.name || resp?.operations?.[0]?.name;
+    // Extract primaryMediaId, workflow name, or operation name
+    const primaryMediaId = resp?.workflows?.[0]?.metadata?.primaryMediaId;
+    const opName = primaryMediaId || resp?.workflows?.[0]?.name || resp?.operations?.[0]?.operation?.name || resp?.operations?.[0]?.name;
     if (!opName) {
       throw new Error(`Không tạo được operation sinh video. Google trả về: ${JSON.stringify(resp?.error || resp).substring(0, 200)}`);
     }
@@ -443,6 +445,7 @@ class FlowBridge {
     };
 
     const resp = await this.apiRequest(url, 'POST', {}, body);
+    console.log(`[FlowBridge] pollVideoStatus response for ${operationName}:`, JSON.stringify(resp));
     const op = resp?.operations?.[0];
     const status = op?.status;
     const isDone = op?.operation?.done || op?.done || status === 'MEDIA_GENERATION_STATUS_SUCCESSFUL' || status === 'MEDIA_GENERATION_STATUS_FAILED';

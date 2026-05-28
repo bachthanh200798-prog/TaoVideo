@@ -1,7 +1,9 @@
 {
-  "repoId": "4e5dd0a1-f62a-462b-ba51-ebad566c9ac9",
+  "repoId": "2105fd5c-e909-4871-af09-1d156c36f63f",
   "repoName": "Auto-Video-Production",
   "server": "https://api.grapuco.com",
+  "language": "typescript",
+  "framework": "nextjs",
   "features": {
     "embeddings": true,
     "dataFlowAnalysis": true
@@ -16,5 +18,8 @@
     "vendor",
     "target",
     "build"
-  ]
+  ],
+  "workspaceId": "d50ef68c-75b8-4a87-9be9-ee3289428f6f",
+  "workspaceName": "AutoVideo",
+  "lastPush": "2026-05-28T02:40:08.314Z"
 }

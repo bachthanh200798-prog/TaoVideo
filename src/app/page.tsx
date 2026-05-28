@@ -224,8 +224,7 @@ export default function Home() {
       }
 
       setPipelineState('script-ready');
-      setProgressStatusText('Đã tạo kịch bản thành công! Bắt đầu tạo video...');
-      await startAutoCompile(targetScript);
+      setProgressStatusText('Kịch bản đã được khởi tạo. Vui lòng rà soát nội dung kịch bản ở khung bên phải, chỉnh sửa nếu cần và nhấn "Duyệt Kịch Bản & Render Video" để bắt đầu sản xuất.');
     } catch (err: any) {
       console.error(err);
       setErrorMsg(err.message || 'Có lỗi xảy ra trong quá trình xử lý.');
@@ -699,9 +698,19 @@ export default function Home() {
                   </div>
                 </div>
 
+                <div className={`progress-item ${pipelineState === 'script-ready' ? 'active' : ''}`}>
+                  <div className={`progress-icon ${pipelineState === 'script-ready' ? 'loading' : (['media-generating', 'compiling', 'completed'].includes(pipelineState) ? 'done' : 'todo')}`}>
+                    {pipelineState === 'script-ready' ? '🔄' : '4'}
+                  </div>
+                  <div className="progress-text">
+                    <h4>Kiểm duyệt & Chỉnh sửa nội dung</h4>
+                    <p>Người dùng kiểm tra, tinh chỉnh lời thoại và prompt hình ảnh trước khi sản xuất.</p>
+                  </div>
+                </div>
+
                 <div className={`progress-item ${pipelineState === 'media-generating' ? 'active' : ''}`}>
                   <div className={`progress-icon ${pipelineState === 'media-generating' ? 'loading' : (['compiling', 'completed'].includes(pipelineState) ? 'done' : 'todo')}`}>
-                    {pipelineState === 'media-generating' ? '🔄' : '4'}
+                    {pipelineState === 'media-generating' ? '🔄' : '5'}
                   </div>
                   <div className="progress-text">
                     <h4>Tạo giọng đọc & hình ảnh/video</h4>
@@ -711,7 +720,7 @@ export default function Home() {
 
                 <div className={`progress-item ${pipelineState === 'compiling' ? 'active' : ''}`}>
                   <div className={`progress-icon ${pipelineState === 'compiling' ? 'loading' : (pipelineState === 'completed' ? 'done' : 'todo')}`}>
-                    {pipelineState === 'compiling' ? '🔄' : '5'}
+                    {pipelineState === 'compiling' ? '🔄' : '6'}
                   </div>
                   <div className="progress-text">
                     <h4>Biên tập & Kết xuất video</h4>
@@ -762,6 +771,26 @@ export default function Home() {
           {script && (
             <div className="card">
               <h2 className="card-title">📝 Kịch Bản Được Đề Xuất</h2>
+
+              {pipelineState === 'script-ready' && (
+                <div className="review-banner" style={{
+                  padding: '1rem',
+                  borderRadius: '8px',
+                  background: 'rgba(234, 179, 8, 0.1)',
+                  border: '1px solid rgba(234, 179, 8, 0.2)',
+                  color: '#fbbf24',
+                  fontSize: '0.9rem',
+                  marginBottom: '1.5rem',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '0.5rem'
+                }}>
+                  <span style={{ fontSize: '1.2rem', lineHeight: '1' }}>⚠️</span>
+                  <div>
+                    <strong style={{ color: '#fbbf24' }}>Yêu cầu phê duyệt:</strong> Vui lòng rà soát lời thoại tiếng Việt và prompt thiết kế hình ảnh của từng cảnh dưới đây. Bạn có thể tự do chỉnh sửa bất kỳ nội dung nào. Sau khi hoàn tất, hãy kéo xuống cuối trang và nhấn nút <strong>🎬 Duyệt Kịch Bản & Render Video</strong> để bắt đầu quá trình sản xuất.
+                  </div>
+                </div>
+              )}
               
               <div className="script-editor-container">
                 <div className="form-group">
@@ -839,8 +868,9 @@ export default function Home() {
                     id="btn-trigger-compile"
                     className="btn btn-primary"
                     onClick={handleCompile}
+                    style={{ width: '100%', padding: '1rem', fontSize: '1.05rem', fontWeight: 'bold' }}
                   >
-                    <span>🎬 Khởi Chạy Render Video</span>
+                    <span>🎬 Duyệt Kịch Bản & Render Video</span>
                   </button>
                 )}
               </div>
