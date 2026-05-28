@@ -37,7 +37,8 @@ export const FfmpegService = {
     scenes: CompileSceneInput[],
     outputDir: string,
     videoFilename: string,
-    subtitlesEnabled = true
+    subtitlesEnabled = true,
+    aspectRatio = '16:9'
   ): Promise<string> {
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
@@ -47,8 +48,22 @@ export const FfmpegService = {
     const tempSubPaths: string[] = [];
     const finalOutputPath = path.join(outputDir, videoFilename);
 
+    let width = 1920;
+    let height = 1080;
+    if (aspectRatio === '9:16') {
+      width = 1080;
+      height = 1920;
+    } else if (aspectRatio === '1:1') {
+      width = 1080;
+      height = 1080;
+    } else if (aspectRatio === '3:4') {
+      width = 1080;
+      height = 1440;
+    }
+    const sizeStr = `${width}x${height}`;
+
     try {
-      console.log(`Starting video compile. Scenes count: ${scenes.length}`);
+      console.log(`Starting video compile. Scenes count: ${scenes.length}, Aspect Ratio: ${aspectRatio} (${sizeStr})`);
       
       const hasDrawtext = subtitlesEnabled && checkDrawtextSupport();
       console.log(`[FFmpeg] Subtitles enabled: ${subtitlesEnabled}, Drawtext filter support: ${checkDrawtextSupport()}, Active subtitle burn-in: ${hasDrawtext}`);
@@ -73,10 +88,9 @@ export const FfmpegService = {
         // Build FFmpeg command for compiling this scene
         if (isVideo) {
           // Visual asset is a video clip: Loop it and truncate at audio end
-          // -vf scale=1920:1080 scaling to standard Full HD
           const filterChain = hasDrawtext
-            ? `scale=1920:1080,drawtext=textfile='${escapedTextFilePath}':expansion=none:fontcolor=white:fontsize=48:box=1:boxcolor=black@0.5:boxborderw=20:x=(w-text_w)/2:y=h-180`
-            : `scale=1920:1080`;
+            ? `scale=${width}:${height},drawtext=textfile='${escapedTextFilePath}':expansion=none:fontcolor=white:fontsize=48:box=1:boxcolor=black@0.5:boxborderw=20:x=(w-text_w)/2:y=h-180`
+            : `scale=${width}:${height}`;
           await runCommand('ffmpeg', [
             '-y',
             '-stream_loop', '-1',
@@ -92,8 +106,8 @@ export const FfmpegService = {
         } else {
           // Visual asset is a static image: Loop image for exact audio duration
           const filterChain = hasDrawtext
-            ? `scale=1920:1080,zoompan=z='zoom+0.0005':d=${Math.ceil(scene.durationSeconds * 25)}:s=1920x1080,drawtext=textfile='${escapedTextFilePath}':expansion=none:fontcolor=white:fontsize=48:box=1:boxcolor=black@0.5:boxborderw=20:x=(w-text_w)/2:y=h-180`
-            : `scale=1920:1080,zoompan=z='zoom+0.0005':d=${Math.ceil(scene.durationSeconds * 25)}:s=1920x1080`;
+            ? `scale=${width}:${height},zoompan=z='zoom+0.0005':d=${Math.ceil(scene.durationSeconds * 25)}:s=${sizeStr},drawtext=textfile='${escapedTextFilePath}':expansion=none:fontcolor=white:fontsize=48:box=1:boxcolor=black@0.5:boxborderw=20:x=(w-text_w)/2:y=h-180`
+            : `scale=${width}:${height},zoompan=z='zoom+0.0005':d=${Math.ceil(scene.durationSeconds * 25)}:s=${sizeStr}`;
           await runCommand('ffmpeg', [
             '-y',
             '-loop', '1',

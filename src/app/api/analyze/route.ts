@@ -19,9 +19,40 @@ export async function POST(req: NextRequest) {
     const productUrl = formData.get('productUrl') as string || '';
     const competitorUrl = formData.get('competitorUrl') as string || '';
     const file = formData.get('competitorFile') as File | null;
+    const language = (formData.get('language') as 'vi' | 'en') || 'vi';
+    const productImage = formData.get('productImage') as File | null;
+    const characterName = formData.get('characterName') as string || '';
+    const characterNationality = formData.get('characterNationality') as string || '';
+    const characterAge = formData.get('characterAge') as string || '';
+    const characterGender = formData.get('characterGender') as string || '';
+    const characterDesc = formData.get('characterDesc') as string || '';
 
     if (!productUrl) {
       return NextResponse.json({ error: 'Product URL is required' }, { status: 400 });
+    }
+
+    let productImageData = null;
+    if (productImage && productImage.size > 0) {
+      console.log('Processing uploaded product reference image...');
+      const imgBuffer = Buffer.from(await productImage.arrayBuffer());
+      productImageData = {
+        base64: imgBuffer.toString('base64'),
+        mimeType: productImage.type || 'image/jpeg'
+      };
+    }
+
+    let characterData = null;
+    if (characterName || characterGender || characterAge || characterNationality) {
+      const descParts = [];
+      if (characterGender) descParts.push(`Giới tính: ${characterGender}`);
+      if (characterAge) descParts.push(`Độ tuổi: ${characterAge}`);
+      if (characterNationality) descParts.push(`Quốc tịch: ${characterNationality}`);
+      if (characterDesc) descParts.push(`Mô tả chi tiết: ${characterDesc}`);
+
+      characterData = {
+        name: characterName || 'MC dẫn chương trình',
+        desc: descParts.join(', ')
+      };
     }
 
     console.log(`Processing analyze request. Product: "${productName}", URL: ${productUrl}`);
@@ -88,12 +119,15 @@ export async function POST(req: NextRequest) {
     const geminiKey = req.headers.get('x-gemini-key') || '';
     let result;
     if (competitorAudioPath && fs.existsSync(competitorAudioPath)) {
-      console.log('Running competitor analysis and script adaptation...');
+      console.log(`Running competitor analysis and script adaptation in language: ${language}...`);
       try {
         const analysis = await GeminiService.analyzeCompetitorAndAdapt(
           competitorAudioPath,
           productName,
           productData,
+          language,
+          productImageData,
+          characterData,
           geminiKey
         );
         result = {
@@ -105,8 +139,15 @@ export async function POST(req: NextRequest) {
         if (fs.existsSync(competitorAudioPath)) fs.unlinkSync(competitorAudioPath);
       }
     } else {
-      console.log('Generating script directly from product data...');
-      const script = await GeminiService.generateScriptFromProduct(productName, productData, geminiKey);
+      console.log(`Generating script directly from product data in language: ${language}...`);
+      const script = await GeminiService.generateScriptFromProduct(
+        productName,
+        productData,
+        language,
+        productImageData,
+        characterData,
+        geminiKey
+      );
       result = {
         mode: 'direct',
         script

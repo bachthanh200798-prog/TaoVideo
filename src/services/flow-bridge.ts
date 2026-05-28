@@ -322,11 +322,53 @@ class FlowBridge {
     return projectId;
   }
 
-  public async genImage(prompt: string, projectId: string): Promise<{ mediaId: string; url: string }> {
+  public async uploadImage(imageBase64: string, mimeType: string, projectId: string, fileName = 'upload.png'): Promise<string> {
+    const url = 'https://aisandbox-pa.googleapis.com/v1/flow/uploadImage';
+    const body = {
+      clientContext: {
+        projectId,
+        tool: 'PINHOLE'
+      },
+      fileName,
+      imageBytes: imageBase64,
+      isHidden: false,
+      isUserUploaded: true,
+      mimeType
+    };
+    
+    console.log(`[FlowBridge] Uploading reference image to project: ${projectId}...`);
+    const resp = await this.apiRequest(url, 'POST', {}, body);
+    
+    console.log('[FlowBridge] uploadImage raw response:', JSON.stringify(resp)?.substring(0, 300));
+    
+    const mediaId = resp?.media?.name;
+    if (!mediaId) {
+      throw new Error(`Upload ảnh lên Flow thất bại. Google trả về: ${JSON.stringify(resp?.error || resp).substring(0, 200)}`);
+    }
+    console.log(`[FlowBridge] Image uploaded successfully. Media ID: ${mediaId}`);
+    return mediaId;
+  }
+
+  public async genImage(prompt: string, projectId: string, aspectRatio = '16:9', refMediaIds: string[] = []): Promise<{ mediaId: string; url: string }> {
     const url = `https://aisandbox-pa.googleapis.com/v1/projects/${projectId}/flowMedia:batchGenerateImages`;
     const batchId = crypto.randomUUID();
     const seed = Math.floor(Math.random() * 1000000);
     
+    const imageAspectRatio = aspectRatio === '9:16' 
+      ? 'IMAGE_ASPECT_RATIO_PORTRAIT' 
+      : aspectRatio === '1:1' 
+        ? 'IMAGE_ASPECT_RATIO_SQUARE'
+        : aspectRatio === '3:4' 
+          ? 'IMAGE_ASPECT_RATIO_PORTRAIT_THREE_FOUR'
+          : 'IMAGE_ASPECT_RATIO_LANDSCAPE';
+
+    const imageInputs = refMediaIds.length > 0
+      ? refMediaIds.map(mid => ({
+          name: mid,
+          imageInputType: 'IMAGE_INPUT_TYPE_REFERENCE'
+        }))
+      : undefined;
+
     const body = {
       clientContext: {
         projectId,
@@ -340,8 +382,9 @@ class FlowBridge {
           structuredPrompt: {
             parts: [{ text: prompt }]
           },
-          imageAspectRatio: 'IMAGE_ASPECT_RATIO_LANDSCAPE', // 16:9 — Flow requires LANDSCAPE not SQUARE
-          imageModelName: 'GEM_PIX_2'
+          imageAspectRatio,
+          imageModelName: 'GEM_PIX_2',
+          ...(imageInputs ? { imageInputs } : {})
         }
       ]
     };
@@ -390,7 +433,7 @@ class FlowBridge {
     throw new Error('Tạo ảnh trên Google Flow thất bại sau nhiều lần thử.');
   }
 
-  public async genVideo(prompt: string, projectId: string, startMediaId: string, modelName = 'veo-3'): Promise<string> {
+  public async genVideo(prompt: string, projectId: string, startMediaId: string, modelName = 'veo-3', aspectRatio = '16:9'): Promise<string> {
     const url = 'https://aisandbox-pa.googleapis.com/v1/video:batchAsyncGenerateVideoStartImage';
     const batchId = crypto.randomUUID();
     const sceneId = crypto.randomUUID();
@@ -398,6 +441,14 @@ class FlowBridge {
 
     // Both Veo 3.1 variants use the same key in Flow
     const videoModelKey = 'veo_3_1_i2v_s_fast';
+
+    const videoAspectRatio = aspectRatio === '9:16'
+      ? 'VIDEO_ASPECT_RATIO_PORTRAIT'
+      : aspectRatio === '1:1'
+        ? 'VIDEO_ASPECT_RATIO_SQUARE'
+        : aspectRatio === '3:4'
+          ? 'VIDEO_ASPECT_RATIO_PORTRAIT' // Fallback to portrait for 3:4 video
+          : 'VIDEO_ASPECT_RATIO_LANDSCAPE';
 
     const body = {
       clientContext: {
@@ -407,7 +458,7 @@ class FlowBridge {
       mediaGenerationContext: { batchId },
       requests: [
         {
-          aspectRatio: 'VIDEO_ASPECT_RATIO_LANDSCAPE', // 16:9
+          aspectRatio: videoAspectRatio,
           seed,
           textInput: {
             structuredPrompt: {

@@ -17,15 +17,42 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { script, productName, voiceId, visualMode, videoModel, useElevenLabs, subtitlesEnabled } = body;
+    const { script, productName, voiceId, visualMode, videoModel, useElevenLabs, subtitlesEnabled, aspectRatio, onlyCreateProject, refMediaIds } = body;
     const isElevenLabsEnabled = useElevenLabs !== false;
     const isSubtitlesEnabled = subtitlesEnabled !== false;
+    const activeAspectRatio = aspectRatio || '16:9';
+
+    if (onlyCreateProject) {
+      const useFlowExtension = req.headers.get('x-use-flow-extension') === 'true';
+      if (useFlowExtension) {
+        FlowBridgeService.init();
+        const stats = FlowBridgeService.getStats();
+        if (!stats.connected) {
+          return NextResponse.json({
+            error: 'Google Flow Extension chưa được kết nối. Vui lòng tải unpacked extension và mở trang https://labs.google/fx/tools/flow.'
+          }, { status: 400 });
+        }
+        try {
+          const cleanProduct = productName ? String(productName).trim() : '';
+          const cleanScriptTitle = script?.title ? String(script.title).trim() : '';
+          const baseTitle = cleanScriptTitle || cleanProduct || 'AutoVideo Production';
+          const projectTitle = `${baseTitle} - Flow`;
+          const projectId = await FlowBridgeService.createProject(projectTitle);
+          return NextResponse.json({ success: true, projectId, projectTitle });
+        } catch (err: any) {
+          return NextResponse.json({
+            error: `Không khởi tạo được dự án Google Flow: ${err.message}`
+          }, { status: 400 });
+        }
+      }
+      return NextResponse.json({ error: 'Google Flow Extension is required for onlyCreateProject mode' }, { status: 400 });
+    }
 
     if (!script || !script.scenes || script.scenes.length === 0) {
       return NextResponse.json({ error: 'Valid script with scenes is required' }, { status: 400 });
     }
 
-    console.log(`Starting compilation. Visual Mode: ${visualMode}, Voice ID: ${voiceId}, Use ElevenLabs: ${isElevenLabsEnabled}`);
+    console.log(`Starting compilation. Visual Mode: ${visualMode}, Aspect Ratio: ${activeAspectRatio}, Voice ID: ${voiceId}, Use ElevenLabs: ${isElevenLabsEnabled}`);
 
     const geminiKey = req.headers.get('x-gemini-key') || '';
     const elevenlabsKey = req.headers.get('x-elevenlabs-key') || '';
@@ -34,8 +61,8 @@ export async function POST(req: NextRequest) {
     const useFlowExtension = req.headers.get('x-use-flow-extension') === 'true';
 
     // Verify Flow Extension state if enabled
-    let projectId = '';
-    let projectTitle = '';
+    let projectId = body.projectId || '';
+    let projectTitle = body.projectTitle || '';
     if (useFlowExtension) {
       FlowBridgeService.init();
       const stats = FlowBridgeService.getStats();
@@ -44,16 +71,18 @@ export async function POST(req: NextRequest) {
           error: 'Google Flow Extension chưa được kết nối. Vui lòng tải unpacked extension và mở trang https://labs.google/fx/tools/flow.'
         }, { status: 400 });
       }
-      try {
-        const cleanProduct = productName ? String(productName).trim() : '';
-        const cleanScriptTitle = script.title ? String(script.title).trim() : '';
-        const baseTitle = cleanScriptTitle || cleanProduct || 'AutoVideo Production';
-        projectTitle = `${baseTitle} - Flow`;
-        projectId = await FlowBridgeService.createProject(projectTitle);
-      } catch (err: any) {
-        return NextResponse.json({
-          error: `Không khởi tạo được dự án Google Flow: ${err.message}`
-        }, { status: 400 });
+      if (!projectId) {
+        try {
+          const cleanProduct = productName ? String(productName).trim() : '';
+          const cleanScriptTitle = script.title ? String(script.title).trim() : '';
+          const baseTitle = cleanScriptTitle || cleanProduct || 'AutoVideo Production';
+          projectTitle = `${baseTitle} - Flow`;
+          projectId = await FlowBridgeService.createProject(projectTitle);
+        } catch (err: any) {
+          return NextResponse.json({
+            error: `Không khởi tạo được dự án Google Flow: ${err.message}`
+          }, { status: 400 });
+        }
       }
     }
 
@@ -81,6 +110,10 @@ export async function POST(req: NextRequest) {
         isElevenLabsEnabled ? elevenlabsKey : ''
       );
 
+      // Check if we have an approved storyboard image
+      const storyboardFile = scene.imagePath ? path.join(process.cwd(), 'public', scene.imagePath) : '';
+      const hasStoryboard = storyboardFile && fs.existsSync(storyboardFile);
+
       // 2. Generate Visual Asset (Image or Video)
       let visualPath = '';
       const visualPrompt = scene.visualPrompt || `Product scene for ${script.title}`;
@@ -92,9 +125,14 @@ export async function POST(req: NextRequest) {
           
           console.log(`[FlowBridge] Generating video for Scene ${sceneNum} via Flow...`);
           try {
-            // Veo 3.1 is image-to-video in Flow, so generate starting image first
-            const imgResult = await FlowBridgeService.genImage(visualPrompt, projectId);
-            const opName = await FlowBridgeService.genVideo(visualPrompt, projectId, imgResult.mediaId, videoModel || 'veo-3');
+            // If we have approved storyboard mediaId, we skip generating image
+            let startMediaId = scene.mediaId;
+            if (!startMediaId) {
+              const imgResult = await FlowBridgeService.genImage(visualPrompt, projectId, activeAspectRatio, refMediaIds || []);
+              startMediaId = imgResult.mediaId;
+            }
+            
+            const opName = await FlowBridgeService.genVideo(visualPrompt, projectId, startMediaId, videoModel || 'veo-3', activeAspectRatio);
             
             // Poll for completion
             let videoUrl = '';
@@ -129,14 +167,20 @@ export async function POST(req: NextRequest) {
           const imageFilename = `image_${timestamp}_scene_${sceneNum}.jpg`;
           const destImagePath = path.join(tempDir, imageFilename);
           
-          console.log(`[FlowBridge] Generating image for Scene ${sceneNum} via Flow...`);
-          try {
-            const imgResult = await FlowBridgeService.genImage(visualPrompt, projectId);
-            await FlowBridgeService.downloadAsset(imgResult.url, destImagePath);
+          if (hasStoryboard) {
+            console.log(`[FlowBridge] Copying approved storyboard image for Scene ${sceneNum}...`);
+            fs.copyFileSync(storyboardFile, destImagePath);
             visualPath = destImagePath;
-          } catch (err: any) {
-            console.error(`[FlowBridge] Flow image generation failed for Scene ${sceneNum}:`, err);
-            throw new Error(`Tạo ảnh bằng Google Flow thất bại ở Cảnh ${sceneNum}: ${err.message}`);
+          } else {
+            console.log(`[FlowBridge] Generating image for Scene ${sceneNum} via Flow...`);
+            try {
+              const imgResult = await FlowBridgeService.genImage(visualPrompt, projectId, activeAspectRatio, refMediaIds || []);
+              await FlowBridgeService.downloadAsset(imgResult.url, destImagePath);
+              visualPath = destImagePath;
+            } catch (err: any) {
+              console.error(`[FlowBridge] Flow image generation failed for Scene ${sceneNum}:`, err);
+              throw new Error(`Tạo ảnh bằng Google Flow thất bại ở Cảnh ${sceneNum}: ${err.message}`);
+            }
           }
         }
       } else {
@@ -148,22 +192,31 @@ export async function POST(req: NextRequest) {
             visualPrompt,
             videoModel || 'veo-3',
             destVideoPath,
+            activeAspectRatio,
+            hasStoryboard ? storyboardFile : null,
             geminiKey,
             bananaKey,
             bananaUrl
           );
         } else {
-          // Default to images (Banana Pro)
+          // Default to images (Banana Pro / Storyboard copy)
           const imageFilename = `image_${timestamp}_scene_${sceneNum}.jpg`;
           const destImagePath = path.join(tempDir, imageFilename);
           
-          visualPath = await MediaService.generateImage(
-            visualPrompt,
-            destImagePath,
-            geminiKey,
-            bananaKey,
-            bananaUrl
-          );
+          if (hasStoryboard) {
+            console.log(`Copying approved storyboard image for Scene ${sceneNum}...`);
+            fs.copyFileSync(storyboardFile, destImagePath);
+            visualPath = destImagePath;
+          } else {
+            visualPath = await MediaService.generateImage(
+              visualPrompt,
+              destImagePath,
+              activeAspectRatio,
+              geminiKey,
+              bananaKey,
+              bananaUrl
+            );
+          }
         }
       }
 
@@ -185,7 +238,8 @@ export async function POST(req: NextRequest) {
       compileInputs,
       outputDir,
       finalFilename,
-      isSubtitlesEnabled
+      isSubtitlesEnabled,
+      activeAspectRatio
     );
 
     // Clean up temporary assets (images, audio) to save disk space

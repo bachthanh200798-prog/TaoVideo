@@ -50,13 +50,22 @@ async function generateLocalSpeech(text: string, voiceId: string, outputPath: st
   const tempPath = outputPath.replace('.mp3', process.platform === 'win32' ? '.wav' : '.aiff');
 
   if (process.platform === 'darwin') {
-    const macVoice = voiceId === 'macos-lan' ? 'Lan' : 'Linh';
+    let macVoice = 'Linh';
+    if (voiceId === 'macos-lan') {
+      macVoice = 'Lan';
+    } else if (voiceId === 'macos-samantha') {
+      macVoice = 'Samantha';
+    } else if (voiceId === 'macos-daniel') {
+      macVoice = 'Daniel';
+    }
     await runCommand('say', ['-v', macVoice, '-o', tempPath, text]);
   } else if (process.platform === 'win32') {
+    const isEnglish = voiceId === 'macos-samantha' || voiceId === 'macos-daniel' || voiceId === 'local-english';
+    const cultureFilter = isEnglish ? 'en-*' : 'vi-*';
     const psScript = `
 Add-Type -AssemblyName System.Speech
 $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
-$voice = $synth.GetInstalledVoices() | Where-Object { $_.VoiceInfo.Culture.Name -like 'vi-*' } | Select-Object -First 1
+$voice = $synth.GetInstalledVoices() | Where-Object { $_.VoiceInfo.Culture.Name -like '${cultureFilter}' } | Select-Object -First 1
 if ($voice) { $synth.SelectVoice($voice.VoiceInfo.Name) }
 $synth.SetOutputToWaveFile('${tempPath.replace(/'/g, "''")}')
 $synth.Speak('${text.replace(/'/g, "''")}')
@@ -101,8 +110,11 @@ export const MediaService = {
     // Fallback/Mock list of voices (including macOS native voices)
     return [
       { voice_id: 'local-vietnamese', name: 'Vietnamese Local Voice', category: 'local', preview_url: '' },
+      { voice_id: 'local-english', name: 'English Local Voice', category: 'local', preview_url: '' },
       { voice_id: 'macos-linh', name: 'Linh (macOS Vietnamese Female)', category: 'local', preview_url: '' },
       { voice_id: 'macos-lan', name: 'Lan (macOS Vietnamese Female)', category: 'local', preview_url: '' },
+      { voice_id: 'macos-samantha', name: 'Samantha (macOS English Female)', category: 'local', preview_url: '' },
+      { voice_id: 'macos-daniel', name: 'Daniel (macOS English Male)', category: 'local', preview_url: '' },
       { voice_id: 'eleven-rachel', name: 'Rachel (ElevenLabs standard)', category: 'premade', preview_url: 'https://api.elevenlabs.io/v1/voices/21m00Tcm4TlvDq8ikWAM/previews' },
       { voice_id: 'eleven-domi', name: 'Domi (ElevenLabs standard)', category: 'premade', preview_url: 'https://api.elevenlabs.io/v1/voices/AZnzlk1XvdvUeBnXmlld/previews' }
     ];
@@ -175,6 +187,7 @@ export const MediaService = {
   async generateImage(
     prompt: string,
     outputPath: string,
+    aspectRatio = '1:1',
     geminiKey?: string,
     bananaKey?: string,
     bananaUrlOverride?: string
@@ -194,7 +207,7 @@ export const MediaService = {
           prompt: prompt,
           config: {
             numberOfImages: 1,
-            aspectRatio: '1:1',
+            aspectRatio: aspectRatio,
           },
         });
         
@@ -281,6 +294,8 @@ export const MediaService = {
     prompt: string,
     modelName: 'veo-3' | 'omni',
     outputPath: string,
+    aspectRatio = '16:9',
+    startImagePath?: string | null,
     geminiKey?: string,
     bananaKey?: string,
     bananaUrlOverride?: string
@@ -296,13 +311,27 @@ export const MediaService = {
         console.log(`Calling Google GenAI SDK for video generation (${modelName}): "${prompt.substring(0, 45)}..."`);
         const modelId = modelName === 'veo-3' ? 'veo-3.1-generate-001' : 'gemini-omni-flash';
         
+        let startImageConfig = {};
+        if (startImagePath && fs.existsSync(startImagePath)) {
+          const imgBytes = fs.readFileSync(startImagePath).toString('base64');
+          startImageConfig = {
+            startImage: {
+              inlineData: {
+                mimeType: 'image/jpeg',
+                data: imgBytes
+              }
+            }
+          };
+        }
+
         // Call the official video generation API in SDK
         const operation = await (client.models as any).generateVideos({
           model: modelId,
           prompt: prompt,
           config: {
             durationSeconds: 4,
-            aspectRatio: '16:9'
+            aspectRatio: aspectRatio === '9:16' ? '9:16' : aspectRatio === '1:1' ? '1:1' : aspectRatio === '3:4' ? '3:4' : '16:9',
+            ...startImageConfig
           }
         });
 
@@ -322,7 +351,11 @@ export const MediaService = {
     console.log(`Generating local video clip fallback for prompt: "${prompt.substring(0, 45)}..."`);
     try {
       const tempImgPath = outputPath.replace('.mp4', '_temp.jpg');
-      await this.generateImage(`Video scene showing: ${prompt}`, tempImgPath, bananaKey, bananaUrlOverride);
+      if (startImagePath && fs.existsSync(startImagePath)) {
+        fs.copyFileSync(startImagePath, tempImgPath);
+      } else {
+        await this.generateImage(`Video scene showing: ${prompt}`, tempImgPath, aspectRatio, geminiKey, bananaKey, bananaUrlOverride);
+      }
       
       // Render a zooming pan clip of 4 seconds from the image using FFmpeg
       await runCommand('ffmpeg', [

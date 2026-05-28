@@ -7,6 +7,8 @@ interface Scene {
   durationSeconds: number;
   visualPrompt: string;
   voiceoverText: string;
+  imagePath?: string;
+  mediaId?: string;
 }
 
 interface VideoScript {
@@ -71,6 +73,21 @@ export default function Home() {
   const [visualMode, setVisualMode] = useState<'images' | 'video'>('video');
   const [videoModel, setVideoModel] = useState<'veo-3' | 'omni'>('veo-3');
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(true);
+  const [scriptLanguage, setScriptLanguage] = useState<'vi' | 'en'>('vi');
+  const [aspectRatio, setAspectRatio] = useState<'9:16' | '16:9' | '3:4' | '1:1'>('9:16');
+  const [productImage, setProductImage] = useState<File | null>(null);
+  const [productFlowMediaId, setProductFlowMediaId] = useState<string | null>(null);
+  const [useCharacter, setUseCharacter] = useState(false);
+  const [characterName, setCharacterName] = useState('');
+  const [characterNationality, setCharacterNationality] = useState('Việt Nam');
+  const [characterAge, setCharacterAge] = useState('25-30');
+  const [characterGender, setCharacterGender] = useState('Nữ');
+  const [characterDesc, setCharacterDesc] = useState('');
+  const [characterFlowMediaId, setCharacterFlowMediaId] = useState<string | null>(null);
+  const [characterImageUrl, setCharacterImageUrl] = useState<string | null>(null);
+  const [isUploadingProduct, setIsUploadingProduct] = useState(false);
+  const [isGeneratingCharacter, setIsGeneratingCharacter] = useState(false);
+  const [isRegeneratingScene, setIsRegeneratingScene] = useState<number | null>(null);
   
   // App workflow state
   const [script, setScript] = useState<VideoScript | null>(null);
@@ -79,7 +96,7 @@ export default function Home() {
   const [competitorFlow, setCompetitorFlow] = useState<string | null>(null);
   
   // Loading & Progress state
-  const [pipelineState, setPipelineState] = useState<'idle' | 'scraping' | 'analyzing' | 'script-ready' | 'media-generating' | 'compiling' | 'completed' | 'error'>('idle');
+  const [pipelineState, setPipelineState] = useState<'idle' | 'scraping' | 'analyzing' | 'script-ready' | 'storyboard-ready' | 'media-generating' | 'compiling' | 'completed' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [compiledVideoUrl, setCompiledVideoUrl] = useState<string | null>(null);
   const [flowProjectId, setFlowProjectId] = useState<string | null>(null);
@@ -87,6 +104,144 @@ export default function Home() {
   const [progressStatusText, setProgressStatusText] = useState('');
   
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const productImageInputRef = useRef<HTMLInputElement>(null);
+  const charImageInputRef = useRef<HTMLInputElement>(null);
+
+  const uploadProductImageToFlow = async (file: File, activeProjectId: string) => {
+    setIsUploadingProduct(true);
+    try {
+      const reader = new FileReader();
+      const base64Promise = new Promise<string>((resolve) => {
+        reader.onload = () => {
+          const result = reader.result as string;
+          const base64 = result.split(',')[1];
+          resolve(base64);
+        };
+      });
+      reader.readAsDataURL(file);
+      const base64 = await base64Promise;
+
+      const res = await fetch('/api/flow/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageBase64: base64,
+          mimeType: file.type,
+          projectId: activeProjectId
+        })
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to upload image');
+      }
+
+      const data = await res.json();
+      if (data.mediaId) {
+        setProductFlowMediaId(data.mediaId);
+        localStorage.setItem('product_flow_media_id', data.mediaId);
+      }
+    } catch (err: any) {
+      console.error('Failed to upload product image to Flow:', err);
+      setErrorMsg(`Không thể tải ảnh sản phẩm lên Google Flow: ${err.message}`);
+    } finally {
+      setIsUploadingProduct(false);
+    }
+  };
+
+  const handleGenerateCharacterPortrait = async () => {
+    setErrorMsg(null);
+    setIsGeneratingCharacter(true);
+    try {
+      let activeProjId = flowProjectId;
+      if (!activeProjId) {
+        setProgressStatusText('Đang khởi tạo dự án mới trên Google Flow...');
+        activeProjId = await triggerCreateFlowProjectOnly();
+      }
+
+      setProgressStatusText('Đang tạo chân dung nhân vật đại diện trên Google Flow...');
+      const res = await fetch('/api/flow/character', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: activeProjId,
+          gender: characterGender,
+          age: characterAge,
+          nationality: characterNationality,
+          aspectRatio: '9:16'
+        })
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to generate character');
+      }
+
+      const data = await res.json();
+      if (data.mediaId && data.url) {
+        setCharacterFlowMediaId(data.mediaId);
+        setCharacterImageUrl(data.url);
+        localStorage.setItem('character_flow_media_id', data.mediaId);
+        localStorage.setItem('character_image_url', data.url);
+      }
+    } catch (err: any) {
+      console.error('Failed to generate character:', err);
+      setErrorMsg(`Không thể tạo chân dung nhân vật trên Google Flow: ${err.message}`);
+    } finally {
+      setIsGeneratingCharacter(false);
+    }
+  };
+
+  const handleUploadCharacterPortrait = async (file: File) => {
+    setIsGeneratingCharacter(true);
+    try {
+      let activeProjId = flowProjectId;
+      if (!activeProjId) {
+        setProgressStatusText('Đang khởi tạo dự án mới trên Google Flow...');
+        activeProjId = await triggerCreateFlowProjectOnly();
+      }
+
+      const reader = new FileReader();
+      const base64Promise = new Promise<string>((resolve) => {
+        reader.onload = () => {
+          const result = reader.result as string;
+          const base64 = result.split(',')[1];
+          resolve(base64);
+        };
+      });
+      reader.readAsDataURL(file);
+      const base64 = await base64Promise;
+
+      const res = await fetch('/api/flow/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageBase64: base64,
+          mimeType: file.type,
+          projectId: activeProjId
+        })
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to upload character portrait');
+      }
+
+      const data = await res.json();
+      if (data.mediaId) {
+        setCharacterFlowMediaId(data.mediaId);
+        const localUrl = URL.createObjectURL(file);
+        setCharacterImageUrl(localUrl);
+        localStorage.setItem('character_flow_media_id', data.mediaId);
+        localStorage.setItem('character_image_url', localUrl);
+      }
+    } catch (err: any) {
+      console.error('Failed to upload character portrait:', err);
+      setErrorMsg(`Không thể tải ảnh chân dung MC lên Google Flow: ${err.message}`);
+    } finally {
+      setIsGeneratingCharacter(false);
+    }
+  };
 
   // Fetch available voices from ElevenLabs API
   const fetchVoices = async (elevenlabsKey?: string) => {
@@ -121,6 +276,20 @@ export default function Home() {
     const useEl = localStorage.getItem('use_elevenlabs') !== 'false';
     const lVoice = localStorage.getItem('local_voice') || 'local-vietnamese';
     const subs = localStorage.getItem('subtitles_enabled') !== 'false';
+    const scriptLang = (localStorage.getItem('script_language') as 'vi' | 'en') || 'vi';
+    const aspect = (localStorage.getItem('aspect_ratio') as '9:16' | '16:9' | '3:4' | '1:1') || '9:16';
+    const useChar = localStorage.getItem('use_character') === 'true';
+    const charName = localStorage.getItem('character_name') || '';
+    const charNationality = localStorage.getItem('character_nationality') || 'Việt Nam';
+    const charAge = localStorage.getItem('character_age') || '25-30';
+    const charGender = localStorage.getItem('character_gender') || 'Nữ';
+    const charDesc = localStorage.getItem('character_desc') || '';
+
+    const cachedProjId = localStorage.getItem('flow_project_id') || null;
+    const cachedProjTitle = localStorage.getItem('flow_project_title') || null;
+    const prodMediaId = localStorage.getItem('product_flow_media_id') || null;
+    const charMediaId = localStorage.getItem('character_flow_media_id') || null;
+    const charImgUrl = localStorage.getItem('character_image_url') || null;
 
     setGeminiApiKey(gKey);
     setElevenLabsApiKey(eKey);
@@ -130,6 +299,20 @@ export default function Home() {
     setUseElevenLabs(useEl);
     setLocalVoice(lVoice);
     setSubtitlesEnabled(subs);
+    setScriptLanguage(scriptLang);
+    setAspectRatio(aspect);
+    setUseCharacter(useChar);
+    setCharacterName(charName);
+    setCharacterNationality(charNationality);
+    setCharacterAge(charAge);
+    setCharacterGender(charGender);
+    setCharacterDesc(charDesc);
+
+    if (cachedProjId) setFlowProjectId(cachedProjId);
+    if (cachedProjTitle) setFlowProjectTitle(cachedProjTitle);
+    if (prodMediaId) setProductFlowMediaId(prodMediaId);
+    if (charMediaId) setCharacterFlowMediaId(charMediaId);
+    if (charImgUrl) setCharacterImageUrl(charImgUrl);
 
     fetchVoices(eKey);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -199,6 +382,17 @@ export default function Home() {
       const formData = new FormData();
       formData.append('productName', productName);
       formData.append('productUrl', productUrl);
+      formData.append('language', scriptLanguage);
+      if (productImage) {
+        formData.append('productImage', productImage);
+      }
+      if (useCharacter && characterName) {
+        formData.append('characterName', characterName);
+        formData.append('characterNationality', characterNationality);
+        formData.append('characterAge', characterAge);
+        formData.append('characterGender', characterGender);
+        formData.append('characterDesc', characterDesc);
+      }
       
       if (activeTab === 'competitor') {
         if (competitorFile) {
@@ -261,13 +455,149 @@ export default function Home() {
     });
   };
 
+  const handleGenerateStoryboard = async () => {
+    if (!script) return;
+    setErrorMsg(null);
+    setPipelineState('media-generating');
+    setProgressStatusText('Đang tiến hành tạo các hình ảnh phác thảo cho Storyboard (Banana Pro/Flow)...');
+
+    try {
+      const activeProjId = useFlowExtension ? await triggerCreateFlowProjectOnly() : null;
+      
+      const res = await fetch('/api/storyboard', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scenes: script.scenes,
+          scriptTitle: script.title,
+          useFlowExtension,
+          projectId: activeProjId,
+          geminiKey: geminiApiKey,
+          bananaKey: bananaApiKey,
+          bananaUrl: bananaApiUrl,
+          aspectRatio,
+          refMediaIds: [productFlowMediaId, useCharacter ? characterFlowMediaId : null].filter(Boolean)
+        })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || 'Tạo Storyboard thất bại.');
+      }
+
+      const data = await res.json();
+      if (data.success && data.scenes) {
+        setScript({
+          ...script,
+          scenes: data.scenes
+        });
+        setPipelineState('storyboard-ready');
+        setProgressStatusText('Storyboard đã được tạo thành công! Hãy rà soát hình ảnh phác thảo ở khung bên phải. Bạn có thể nhấn "Tạo lại ảnh" cho từng cảnh hoặc nhấn "Duyệt Storyboard & Render Video" để bắt đầu.');
+      } else {
+        throw new Error('Dữ liệu storyboard phản hồi không hợp lệ.');
+      }
+    } catch (err: any) {
+      console.error(err);
+      setErrorMsg(err.message || 'Tạo Storyboard thất bại.');
+      setPipelineState('error');
+    }
+  };
+
+  const handleRegenerateSceneImage = async (index: number) => {
+    if (!script) return;
+    setIsRegeneratingScene(index);
+    setErrorMsg(null);
+    
+    try {
+      const targetScene = script.scenes[index];
+      const res = await fetch('/api/storyboard', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scenes: [targetScene],
+          scriptTitle: script.title,
+          useFlowExtension,
+          projectId: flowProjectId,
+          geminiKey: geminiApiKey,
+          bananaKey: bananaApiKey,
+          bananaUrl: bananaApiUrl,
+          aspectRatio,
+          refMediaIds: [productFlowMediaId, useCharacter ? characterFlowMediaId : null].filter(Boolean)
+        })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || 'Tạo lại hình ảnh cảnh thất bại.');
+      }
+
+      const data = await res.json();
+      if (data.success && data.scenes && data.scenes.length > 0) {
+        const updatedScenes = [...script.scenes];
+        updatedScenes[index] = data.scenes[0];
+        setScript({
+          ...script,
+          scenes: updatedScenes
+        });
+      } else {
+        throw new Error('Dữ liệu tạo lại hình ảnh phản hồi không hợp lệ.');
+      }
+    } catch (err: any) {
+      console.error(err);
+      setErrorMsg(`Cảnh ${index + 1}: ${err.message}`);
+    } finally {
+      setIsRegeneratingScene(null);
+    }
+  };
+
+  const triggerCreateFlowProjectOnly = async (): Promise<string> => {
+    if (flowProjectId) return flowProjectId;
+    try {
+      const cleanProduct = productName ? String(productName).trim() : '';
+      const cleanScriptTitle = script?.title ? String(script.title).trim() : '';
+      const baseTitle = cleanScriptTitle || cleanProduct || 'AutoVideo Production';
+      const projTitle = `${baseTitle} - Flow`;
+      
+      const res = await fetch('/api/compile', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-gemini-key': geminiApiKey,
+          'x-use-flow-extension': 'true'
+        },
+        body: JSON.stringify({
+          script: { ...script, scenes: [] },
+          productName,
+          useFlowExtension: true,
+          onlyCreateProject: true
+        })
+      });
+      
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || 'Failed to create project');
+      }
+      
+      const data = await res.json();
+      if (data.projectId) {
+        setFlowProjectId(data.projectId);
+        setFlowProjectTitle(projTitle);
+        localStorage.setItem('flow_project_id', data.projectId);
+        localStorage.setItem('flow_project_title', projTitle);
+        return data.projectId;
+      }
+      throw new Error('No project ID returned');
+    } catch (err: any) {
+      console.error('Failed to create flow project:', err);
+      throw new Error(`Không tạo được dự án Google Flow: ${err.message}`);
+    }
+  };
+
   // Run continuous automation to compile assets and video
   const startAutoCompile = async (scriptToCompile: VideoScript) => {
     if (!scriptToCompile) return;
 
     setErrorMsg(null);
-    setFlowProjectId(null);
-    setFlowProjectTitle(null);
     setPipelineState('media-generating');
     setProgressStatusText('Đang khởi động tiến trình tạo giọng nói và hình ảnh/video...');
 
@@ -289,7 +619,10 @@ export default function Home() {
           visualMode,
           videoModel,
           useElevenLabs,
-          subtitlesEnabled
+          subtitlesEnabled,
+          aspectRatio,
+          projectId: flowProjectId,
+          refMediaIds: [productFlowMediaId, useCharacter ? characterFlowMediaId : null].filter(Boolean)
         })
       });
 
@@ -307,9 +640,11 @@ export default function Home() {
         setCompiledVideoUrl(data.videoUrl);
         if (data.projectId) {
           setFlowProjectId(data.projectId);
+          localStorage.setItem('flow_project_id', data.projectId);
         }
         if (data.projectTitle) {
           setFlowProjectTitle(data.projectTitle);
+          localStorage.setItem('flow_project_title', data.projectTitle);
         }
         setPipelineState('completed');
         setProgressStatusText('Sản xuất video thành công! Bạn có thể xem hoặc tải về máy.');
@@ -336,8 +671,6 @@ export default function Home() {
     setCompetitorTranscript(null);
     setCompiledVideoUrl(null);
     setCompetitorFile(null);
-    setFlowProjectId(null);
-    setFlowProjectTitle(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -380,6 +713,30 @@ export default function Home() {
 
               <form onSubmit={handleAnalyze}>
                 <div className="form-group">
+                  <label htmlFor="select-script-language">Ngôn ngữ kịch bản (Script Language)</label>
+                  <select
+                    id="select-script-language"
+                    className="form-input"
+                    value={scriptLanguage}
+                    onChange={(e) => {
+                      const val = e.target.value as 'vi' | 'en';
+                      setScriptLanguage(val);
+                      localStorage.setItem('script_language', val);
+                      
+                      // Auto-switch default localVoice to match language
+                      if (val === 'en') {
+                        setLocalVoice('macos-samantha');
+                      } else {
+                        setLocalVoice('local-vietnamese');
+                      }
+                    }}
+                  >
+                    <option value="vi">🇻🇳 Tiếng Việt (Vietnamese)</option>
+                    <option value="en">🇺🇸 Tiếng Anh (English)</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
                   <label htmlFor="input-product-name">
                     {activeTab === 'competitor' ? 'Tên sản phẩm của bạn (để viết lại kịch bản)' : 'Tên sản phẩm'}
                   </label>
@@ -407,6 +764,250 @@ export default function Home() {
                     onChange={(e) => setProductUrl(e.target.value)}
                     required
                   />
+                </div>
+
+                <div className="form-group" style={{ marginTop: '1.25rem' }}>
+                  <label>Ảnh thực tế sản phẩm (Để giữ mẫu sản phẩm chính xác, không biến dạng)</label>
+                  <div 
+                    id="dropzone-product-image"
+                    className="file-upload"
+                    onClick={() => productImageInputRef.current?.click()}
+                    style={{ border: '2px dashed var(--card-border)', background: 'rgba(255, 255, 255, 0.01)' }}
+                  >
+                    <input
+                      ref={productImageInputRef}
+                      type="file"
+                      accept="image/*"
+                      style={{ display: 'none' }}
+                      onChange={async (e) => {
+                        if (e.target.files && e.target.files[0]) {
+                          const file = e.target.files[0];
+                          setProductImage(file);
+                          
+                          if (useFlowExtension) {
+                            try {
+                              let activeProjId = flowProjectId;
+                              if (!activeProjId) {
+                                setProgressStatusText('Đang khởi tạo dự án mới trên Google Flow...');
+                                activeProjId = await triggerCreateFlowProjectOnly();
+                              }
+                              if (activeProjId) {
+                                await uploadProductImageToFlow(file, activeProjId);
+                              }
+                            } catch (err: any) {
+                              setErrorMsg(err.message);
+                            }
+                          }
+                        }
+                      }}
+                    />
+                    {productImage ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
+                          ✓ {productImage.name} ({(productImage.size / 1024).toFixed(1)} KB)
+                        </span>
+                        {isUploadingProduct ? (
+                          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                            <span className="spinner" style={{ width: '12px', height: '12px' }} /> Đang đồng bộ lên Flow...
+                          </div>
+                        ) : productFlowMediaId ? (
+                          <div style={{ fontSize: '0.75rem', color: '#22c55e', fontWeight: 600 }}>
+                            Đã khoá sản phẩm trên Flow (ID: {productFlowMediaId.substring(0, 8)}...)
+                          </div>
+                        ) : null}
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={URL.createObjectURL(productImage)}
+                          alt="Product preview"
+                          style={{ maxWidth: '120px', maxHeight: '120px', borderRadius: '6px', border: '1px solid var(--card-border)', objectFit: 'contain', marginTop: '0.25rem' }}
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        <span style={{ fontSize: '1.5rem' }}>📸</span>
+                        <p>Kéo thả hoặc nhấp để tải lên ảnh sản phẩm (.jpg, .png)</p>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Character Configuration Section */}
+                <div className="form-group" style={{ 
+                  background: 'rgba(255, 255, 255, 0.02)', 
+                  padding: '1.25rem', 
+                  borderRadius: '12px', 
+                  border: '1px solid var(--card-border)', 
+                  marginTop: '1.5rem',
+                  backdropFilter: 'blur(10px)',
+                  boxShadow: 'inset 0 1px 1px rgba(255,255,255,0.05)'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                    <label style={{ margin: 0, fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.95rem', color: '#fff' }}>
+                      👤 Sử dụng nhân vật đại diện (Host/Character)
+                    </label>
+                    <label style={{ position: 'relative', display: 'inline-block', width: '42px', height: '22px', cursor: 'pointer' }}>
+                      <input 
+                        type="checkbox" 
+                        checked={useCharacter} 
+                        onChange={(e) => {
+                          const val = e.target.checked;
+                          setUseCharacter(val);
+                          localStorage.setItem('use_character', String(val));
+                        }}
+                        style={{ opacity: 0, width: 0, height: 0 }}
+                      />
+                      <span suppressHydrationWarning style={{
+                        position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+                        backgroundColor: useCharacter ? 'var(--primary)' : '#444',
+                        borderRadius: '22px', transition: '0.3s'
+                      }}>
+                        <span suppressHydrationWarning style={{
+                          position: 'absolute', height: '16px', width: '16px', left: useCharacter ? '22px' : '4px', bottom: '3px',
+                          backgroundColor: 'white', borderRadius: '50%', transition: '0.3s'
+                        }}/>
+                      </span>
+                    </label>
+                  </div>
+                  
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: '0 0 1rem 0', lineHeight: '1.4' }}>
+                    Định hình nhân vật dẫn chuyện (MC) xuất hiện xuyên suốt video giúp tạo dựng niềm tin và sự nhất quán hình ảnh thương hiệu.
+                  </p>
+
+                  {useCharacter && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.5rem' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label htmlFor="select-character-gender" style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600, display: 'block', marginBottom: '0.4rem' }}>Giới tính</label>
+                          <select
+                            id="select-character-gender"
+                            className="form-input"
+                            value={characterGender}
+                            onChange={(e) => {
+                              setCharacterGender(e.target.value);
+                              localStorage.setItem('character_gender', e.target.value);
+                            }}
+                            style={{ width: '100%' }}
+                          >
+                            <option value="Nữ">Nữ (Female)</option>
+                            <option value="Nam">Nam (Male)</option>
+                            <option value="Khác">Khác (Other)</option>
+                          </select>
+                        </div>
+
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label htmlFor="select-character-age" style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600, display: 'block', marginBottom: '0.4rem' }}>Độ tuổi</label>
+                          <select
+                            id="select-character-age"
+                            className="form-input"
+                            value={characterAge}
+                            onChange={(e) => {
+                              setCharacterAge(e.target.value);
+                              localStorage.setItem('character_age', e.target.value);
+                            }}
+                            style={{ width: '100%' }}
+                          >
+                            <option value="18-24">18-24 tuổi</option>
+                            <option value="25-30">25-30 tuổi</option>
+                            <option value="31-40">31-40 tuổi</option>
+                            <option value="41-50">41-50 tuổi</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label htmlFor="select-character-nationality" style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600, display: 'block', marginBottom: '0.4rem' }}>Quốc tịch / Sắc tộc</label>
+                        <select
+                          id="select-character-nationality"
+                          className="form-input"
+                          value={characterNationality}
+                          onChange={(e) => {
+                            setCharacterNationality(e.target.value);
+                            localStorage.setItem('character_nationality', e.target.value);
+                          }}
+                          style={{ width: '100%' }}
+                        >
+                          <option value="Việt Nam">Việt Nam (Vietnamese)</option>
+                          <option value="Châu Á">Châu Á (Asian)</option>
+                          <option value="Âu Mỹ">Âu Mỹ (Western/Caucasian)</option>
+                          <option value="Hàn Quốc">Hàn Quốc (Korean)</option>
+                          <option value="Nhật Bản">Nhật Bản (Japanese)</option>
+                        </select>
+                      </div>
+
+                      {/* Chân dung MC preview & buttons */}
+                      <div className="form-group" style={{ margin: '0.5rem 0 0 0', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '0.75rem' }}>
+                        <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600, display: 'block', marginBottom: '0.4rem' }}>Chân dung MC trên Google Flow</label>
+                        
+                        {characterImageUrl ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', padding: '0.75rem', background: 'rgba(0,0,0,0.15)', borderRadius: '8px', border: '1px solid var(--card-border)' }}>
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img 
+                              src={characterImageUrl} 
+                              alt="MC Portrait preview" 
+                              style={{ width: '90px', height: '120px', objectFit: 'cover', borderRadius: '6px', border: '1px solid var(--card-border)' }}
+                            />
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', wordBreak: 'break-all', textAlign: 'center' }}>
+                              ID: <code>{characterFlowMediaId}</code>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => {
+                                setCharacterFlowMediaId(null);
+                                setCharacterImageUrl(null);
+                                localStorage.removeItem('character_flow_media_id');
+                                localStorage.removeItem('character_image_url');
+                              }}
+                              style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem', marginTop: '0.25rem' }}
+                            >
+                              ✕ Xoá chân dung
+                            </button>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              disabled={isGeneratingCharacter}
+                              onClick={handleGenerateCharacterPortrait}
+                              style={{ width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.25rem', background: 'rgba(255, 255, 255, 0.05)' }}
+                            >
+                              {isGeneratingCharacter ? (
+                                <>
+                                  <span className="spinner" style={{ width: '12px', height: '12px' }} /> Đang tạo chân dung...
+                                </>
+                              ) : (
+                                <>✨ Tạo chân dung MC trên Flow</>
+                              )}
+                            </button>
+
+                            <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.7rem' }}>hoặc</div>
+
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              disabled={isGeneratingCharacter}
+                              onClick={() => charImageInputRef.current?.click()}
+                              style={{ width: '100%', background: 'rgba(255, 255, 255, 0.02)' }}
+                            >
+                              📁 Tải ảnh chân dung của bạn
+                            </button>
+                            <input
+                              ref={charImageInputRef}
+                              type="file"
+                              accept="image/*"
+                              style={{ display: 'none' }}
+                              onChange={(e) => {
+                                if (e.target.files && e.target.files[0]) {
+                                  handleUploadCharacterPortrait(e.target.files[0]);
+                                }
+                              }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {activeTab === 'competitor' && (
@@ -521,9 +1122,19 @@ export default function Home() {
                           localStorage.setItem('local_voice', val);
                         }}
                       >
-                        <option value="local-vietnamese">Giọng Tiếng Việt nội bộ của hệ điều hành</option>
-                        <option value="macos-linh">Linh (Giọng máy macOS Tiếng Việt Nữ)</option>
-                        <option value="macos-lan">Lan (Giọng máy macOS Tiếng Việt Nữ)</option>
+                        {scriptLanguage === 'en' ? (
+                          <>
+                            <option value="local-english">Giọng Tiếng Anh nội bộ của hệ điều hành</option>
+                            <option value="macos-samantha">Samantha (Giọng máy macOS Tiếng Anh Nữ)</option>
+                            <option value="macos-daniel">Daniel (Giọng máy macOS Tiếng Anh Nam)</option>
+                          </>
+                        ) : (
+                          <>
+                            <option value="local-vietnamese">Giọng Tiếng Việt nội bộ của hệ điều hành</option>
+                            <option value="macos-linh">Linh (Giọng máy macOS Tiếng Việt Nữ)</option>
+                            <option value="macos-lan">Lan (Giọng máy macOS Tiếng Việt Nữ)</option>
+                          </>
+                        )}
                       </select>
                     </div>
                   )}
@@ -580,6 +1191,66 @@ export default function Home() {
                           <li>Chọn <b>Load unpacked</b> và tìm đến thư mục <code>public/extension</code> trong thư mục dự án này.</li>
                           <li>Mở tab <a href="https://labs.google/fx/tools/flow" target="_blank" rel="noreferrer" style={{ color: 'var(--primary)', textDecoration: 'underline' }}>labs.google/fx/tools/flow</a> và đăng nhập tài khoản Google.</li>
                         </ol>
+                      </div>
+                    )}
+
+                    {useFlowExtension && (
+                      <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px dashed var(--card-border)' }}>
+                        {flowProjectId ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'rgba(255,255,255,0.02)', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--card-border)' }}>
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                              Dự án đang liên kết:
+                            </div>
+                            <div style={{ fontSize: '0.85rem', fontWeight: 'bold', color: '#fff', wordBreak: 'break-all' }}>
+                              {flowProjectTitle}
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                              <code style={{ fontSize: '0.75rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: 'rgba(0,0,0,0.3)', color: '#ccc', wordBreak: 'break-all' }}>
+                                {flowProjectId}
+                              </code>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => {
+                                  setFlowProjectId(null);
+                                  setFlowProjectTitle(null);
+                                  setProductFlowMediaId(null);
+                                  setCharacterFlowMediaId(null);
+                                  setCharacterImageUrl(null);
+                                  localStorage.removeItem('flow_project_id');
+                                  localStorage.removeItem('flow_project_title');
+                                  localStorage.removeItem('product_flow_media_id');
+                                  localStorage.removeItem('character_flow_media_id');
+                                  localStorage.removeItem('character_image_url');
+                                }}
+                                style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem', marginLeft: 'auto', background: 'rgba(239, 68, 68, 0.2)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#ff8888' }}
+                              >
+                                ✕ Giải phóng
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                              Chưa liên kết dự án nào. Một dự án sẽ được tạo tự động khi bạn upload sản phẩm hoặc bắt đầu sản xuất.
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={async () => {
+                                try {
+                                  setProgressStatusText('Đang khởi tạo dự án mới trên Google Flow...');
+                                  await triggerCreateFlowProjectOnly();
+                                } catch (err: any) {
+                                  setErrorMsg(err.message);
+                                }
+                              }}
+                              style={{ width: '100%', fontSize: '0.8rem', background: 'rgba(255, 255, 255, 0.05)' }}
+                            >
+                              ➕ Khởi tạo dự án mới trên Flow
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -654,6 +1325,25 @@ export default function Home() {
                       </div>
                     </div>
                   </div>
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="select-aspect-ratio">Khung hình Video (Aspect Ratio)</label>
+                  <select
+                    id="select-aspect-ratio"
+                    className="form-input"
+                    value={aspectRatio}
+                    onChange={(e) => {
+                      const val = e.target.value as '9:16' | '16:9' | '3:4' | '1:1';
+                      setAspectRatio(val);
+                      localStorage.setItem('aspect_ratio', val);
+                    }}
+                  >
+                    <option value="9:16">📱 Dọc (TikTok/Reels) - 9:16</option>
+                    <option value="16:9">💻 Ngang (YouTube/Web) - 16:9</option>
+                    <option value="1:1">⬜ Vuông (Instagram/Post) - 1:1</option>
+                    <option value="3:4">📸 Dọc chuẩn (Facebook/Feed) - 3:4</option>
+                  </select>
                 </div>
 
                 <div className="form-group">
@@ -739,12 +1429,12 @@ export default function Home() {
                   </div>
                   <div className="progress-text">
                     <h4>AI Biên soạn kịch bản</h4>
-                    <p>Gemini 3.1 Flash Lite xây dựng cấu trúc lời thoại tiếng Việt và gợi ý prompt vẽ ảnh.</p>
+                    <p>Gemini 3.1 Flash Lite xây dựng cấu trúc lời thoại {scriptLanguage === 'en' ? 'tiếng Anh' : 'tiếng Việt'} và gợi ý prompt vẽ ảnh.</p>
                   </div>
                 </div>
 
                 <div className={`progress-item ${pipelineState === 'script-ready' ? 'active' : ''}`}>
-                  <div className={`progress-icon ${pipelineState === 'script-ready' ? 'loading' : (['media-generating', 'compiling', 'completed'].includes(pipelineState) ? 'done' : 'todo')}`}>
+                  <div className={`progress-icon ${pipelineState === 'script-ready' ? 'loading' : (['storyboard-ready', 'media-generating', 'compiling', 'completed'].includes(pipelineState) ? 'done' : 'todo')}`}>
                     {pipelineState === 'script-ready' ? '🔄' : '4'}
                   </div>
                   <div className="progress-text">
@@ -753,9 +1443,19 @@ export default function Home() {
                   </div>
                 </div>
 
+                <div className={`progress-item ${pipelineState === 'storyboard-ready' ? 'active' : ''}`}>
+                  <div className={`progress-icon ${pipelineState === 'storyboard-ready' ? 'loading' : (['media-generating', 'compiling', 'completed'].includes(pipelineState) ? 'done' : 'todo')}`}>
+                    {pipelineState === 'storyboard-ready' ? '🔄' : '5'}
+                  </div>
+                  <div className="progress-text">
+                    <h4>Duyệt & chỉnh sửa Storyboard</h4>
+                    <p>Kiểm duyệt hình ảnh phác thảo cho từng cảnh, tái tạo hoặc chỉnh sửa trước khi dựng video.</p>
+                  </div>
+                </div>
+
                 <div className={`progress-item ${pipelineState === 'media-generating' ? 'active' : ''}`}>
                   <div className={`progress-icon ${pipelineState === 'media-generating' ? 'loading' : (['compiling', 'completed'].includes(pipelineState) ? 'done' : 'todo')}`}>
-                    {pipelineState === 'media-generating' ? '🔄' : '5'}
+                    {pipelineState === 'media-generating' ? '🔄' : '6'}
                   </div>
                   <div className="progress-text">
                     <h4>Tạo giọng đọc & hình ảnh/video</h4>
@@ -765,7 +1465,7 @@ export default function Home() {
 
                 <div className={`progress-item ${pipelineState === 'compiling' ? 'active' : ''}`}>
                   <div className={`progress-icon ${pipelineState === 'compiling' ? 'loading' : (pipelineState === 'completed' ? 'done' : 'todo')}`}>
-                    {pipelineState === 'compiling' ? '🔄' : '6'}
+                    {pipelineState === 'compiling' ? '🔄' : '7'}
                   </div>
                   <div className="progress-text">
                     <h4>Biên tập & Kết xuất video</h4>
@@ -832,7 +1532,7 @@ export default function Home() {
                 }}>
                   <span style={{ fontSize: '1.2rem', lineHeight: '1' }}>⚠️</span>
                   <div>
-                    <strong style={{ color: '#fbbf24' }}>Yêu cầu phê duyệt:</strong> Vui lòng rà soát lời thoại tiếng Việt và prompt thiết kế hình ảnh của từng cảnh dưới đây. Bạn có thể tự do chỉnh sửa bất kỳ nội dung nào. Sau khi hoàn tất, hãy kéo xuống cuối trang và nhấn nút <strong>🎬 Duyệt Kịch Bản & Render Video</strong> để bắt đầu quá trình sản xuất.
+                    <strong style={{ color: '#fbbf24' }}>Yêu cầu phê duyệt:</strong> Vui lòng rà soát lời thoại {scriptLanguage === 'en' ? 'tiếng Anh' : 'tiếng Việt'} và prompt thiết kế hình ảnh của từng cảnh dưới đây. Bạn có thể tự do chỉnh sửa bất kỳ nội dung nào. Sau khi hoàn tất, hãy kéo xuống cuối trang và nhấn nút <strong>🎬 Duyệt Kịch Bản & Render Video</strong> để bắt đầu quá trình sản xuất.
                   </div>
                 </div>
               )}
@@ -882,8 +1582,47 @@ export default function Home() {
                       />
                     </div>
 
+                    {scene.imagePath && (
+                      <div className="form-group" style={{ marginTop: '0.5rem', marginBottom: '1rem', position: 'relative' }}>
+                        <label>Hình ảnh phác thảo (Storyboard Image)</label>
+                        <div style={{ position: 'relative', width: '100%', maxHeight: '240px', overflow: 'hidden', borderRadius: '8px', border: '1px solid var(--card-border)' }}>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={scene.imagePath}
+                            alt={`Storyboard scene ${idx + 1}`}
+                            style={{ width: '100%', height: 'auto', maxHeight: '240px', objectFit: 'contain' }}
+                          />
+                          {isRegeneratingScene === idx && (
+                            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.9rem', fontWeight: 'bold' }}>
+                              🔄 Đang tạo lại ảnh...
+                            </div>
+                          )}
+                        </div>
+                        {pipelineState === 'storyboard-ready' && (
+                          <button
+                            type="button"
+                            className="btn"
+                            style={{ 
+                              marginTop: '0.5rem', 
+                              padding: '0.4rem 0.8rem', 
+                              fontSize: '0.8rem', 
+                              background: 'rgba(255,255,255,0.05)', 
+                              color: '#fff',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.25rem'
+                            }}
+                            onClick={() => handleRegenerateSceneImage(idx)}
+                            disabled={isRegeneratingScene !== null}
+                          >
+                            🔄 Tạo lại ảnh cảnh này
+                          </button>
+                        )}
+                      </div>
+                    )}
+
                     <div className="form-group">
-                      <label htmlFor={`scene-${idx}-voice`}>Lời thoại lồng tiếng (Tiếng Việt)</label>
+                      <label htmlFor={`scene-${idx}-voice`}>Lời thoại lồng tiếng ({scriptLanguage === 'en' ? 'Tiếng Anh' : 'Tiếng Việt'})</label>
                       <textarea
                         id={`scene-${idx}-voice`}
                         className="form-input"
@@ -909,14 +1648,51 @@ export default function Home() {
                 </div>
 
                 {!['scraping', 'analyzing', 'media-generating', 'compiling'].includes(pipelineState) && (
-                  <button 
-                    id="btn-trigger-compile"
-                    className="btn btn-primary"
-                    onClick={handleCompile}
-                    style={{ width: '100%', padding: '1rem', fontSize: '1.05rem', fontWeight: 'bold' }}
-                  >
-                    <span>🎬 Duyệt Kịch Bản & Render Video</span>
-                  </button>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1.5rem' }}>
+                    {pipelineState === 'script-ready' && (
+                      <>
+                        <button 
+                          type="button"
+                          className="btn btn-primary"
+                          onClick={handleGenerateStoryboard}
+                          style={{ width: '100%', padding: '1rem', fontSize: '1.05rem', fontWeight: 'bold', background: 'var(--accent)' }}
+                        >
+                          <span>🎨 Bước 1: Tạo Storyboard (Ảnh cảnh)</span>
+                        </button>
+                        
+                        <button 
+                          type="button"
+                          className="btn"
+                          onClick={handleCompile}
+                          style={{ width: '100%', padding: '0.75rem', fontSize: '0.95rem', background: 'rgba(255,255,255,0.05)', color: '#ccc' }}
+                        >
+                          <span>⚡ Render Video trực tiếp (Bỏ qua Storyboard)</span>
+                        </button>
+                      </>
+                    )}
+
+                    {pipelineState === 'storyboard-ready' && (
+                      <>
+                        <button 
+                          type="button"
+                          className="btn btn-primary"
+                          onClick={handleCompile}
+                          style={{ width: '100%', padding: '1rem', fontSize: '1.05rem', fontWeight: 'bold' }}
+                        >
+                          <span>🎬 Bước 2: Duyệt Storyboard & Render Video</span>
+                        </button>
+                        
+                        <button 
+                          type="button"
+                          className="btn"
+                          onClick={() => setPipelineState('script-ready')}
+                          style={{ width: '100%', padding: '0.75rem', fontSize: '0.95rem', background: 'rgba(255,255,255,0.05)', color: '#ccc' }}
+                        >
+                          <span>✏️ Sửa Lại Lời Thoại / Prompt Kịch Bản</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
