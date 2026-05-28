@@ -328,9 +328,7 @@ class FlowBridge {
     
     const body = {
       clientContext: {
-        clientId: 'FLOW',
         projectId,
-        projectTitle: this.currentProjectTitle,
         recaptchaContext: { token: '' } // solved by extension
       },
       mediaGenerationContext: { batchId },
@@ -402,9 +400,7 @@ class FlowBridge {
 
     const body = {
       clientContext: {
-        clientId: 'FLOW',
         projectId,
-        projectTitle: this.currentProjectTitle,
         recaptchaContext: { token: '' } // solved by extension
       },
       mediaGenerationContext: { batchId },
@@ -439,13 +435,10 @@ class FlowBridge {
     return opName;
   }
 
-  public async pollVideoStatus(operationName: string): Promise<{ done: boolean; url?: string }> {
+  public async pollVideoStatus(operationName: string, projectId?: string): Promise<{ done: boolean; url?: string }> {
     const url = 'https://aisandbox-pa.googleapis.com/v1/video:batchCheckAsyncVideoGenerationStatus';
     const body = {
-      clientContext: {
-        clientId: 'FLOW',
-        projectTitle: this.currentProjectTitle
-      },
+      clientContext: projectId ? { projectId } : {},
       operations: [{ operation: { name: operationName } }]
     };
 

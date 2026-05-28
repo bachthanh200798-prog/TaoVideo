@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
             const maxPollAttempts = 40; // ~2 minutes max
             while (pollAttempts < maxPollAttempts) {
               await new Promise((resolve) => setTimeout(resolve, 3000));
-              const pollResult = await FlowBridgeService.pollVideoStatus(opName);
+              const pollResult = await FlowBridgeService.pollVideoStatus(opName, projectId);
               if (pollResult.done) {
                 if (pollResult.url) {
                   videoUrl = pollResult.url;
