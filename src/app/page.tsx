@@ -26,31 +26,19 @@ interface ElevenLabsVoice {
 }
 
 export default function Home() {
+  // Hydration guard: suppress client-only content until after first paint
+  const [mounted, setMounted] = useState(false);
+
   // Tab control state
   const [activeTab, setActiveTab] = useState<'direct' | 'competitor'>('direct');
 
   // Settings / API credentials state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [geminiApiKey, setGeminiApiKey] = useState(() => {
-    if (typeof window !== 'undefined') return localStorage.getItem('gemini_api_key') || '';
-    return '';
-  });
-  const [elevenLabsApiKey, setElevenLabsApiKey] = useState(() => {
-    if (typeof window !== 'undefined') return localStorage.getItem('elevenlabs_api_key') || '';
-    return '';
-  });
-  const [bananaApiKey, setBananaApiKey] = useState(() => {
-    if (typeof window !== 'undefined') return localStorage.getItem('banana_api_key') || '';
-    return '';
-  });
-  const [bananaApiUrl, setBananaApiUrl] = useState(() => {
-    if (typeof window !== 'undefined') return localStorage.getItem('banana_api_url') || 'https://api.banana-pro.ai/v1/images/generate';
-    return 'https://api.banana-pro.ai/v1/images/generate';
-  });
-  const [useFlowExtension, setUseFlowExtension] = useState(() => {
-    if (typeof window !== 'undefined') return localStorage.getItem('use_flow_extension') === 'true';
-    return false;
-  });
+  const [geminiApiKey, setGeminiApiKey] = useState('');
+  const [elevenLabsApiKey, setElevenLabsApiKey] = useState('');
+  const [bananaApiKey, setBananaApiKey] = useState('');
+  const [bananaApiUrl, setBananaApiUrl] = useState('https://api.banana-pro.ai/v1/images/generate');
+  const [useFlowExtension, setUseFlowExtension] = useState(false);
   const [extensionConnected, setExtensionConnected] = useState(false);
   const [extensionStats, setExtensionStats] = useState<any>(null);
 
@@ -60,23 +48,14 @@ export default function Home() {
   const [competitorUrl, setCompetitorUrl] = useState('');
   const [competitorFile, setCompetitorFile] = useState<File | null>(null);
   
-  // Settings state
-  const [useElevenLabs, setUseElevenLabs] = useState(() => {
-    if (typeof window !== 'undefined') return localStorage.getItem('use_elevenlabs') !== 'false';
-    return true;
-  });
-  const [localVoice, setLocalVoice] = useState(() => {
-    if (typeof window !== 'undefined') return localStorage.getItem('local_voice') || 'macos-linh';
-    return 'macos-linh';
-  });
+  // Settings state — always init with stable defaults to avoid hydration mismatch
+  const [useElevenLabs, setUseElevenLabs] = useState(true);
+  const [localVoice, setLocalVoice] = useState('macos-linh');
   const [voices, setVoices] = useState<ElevenLabsVoice[]>([]);
   const [selectedVoice, setSelectedVoice] = useState('macos-linh');
   const [visualMode, setVisualMode] = useState<'images' | 'video'>('video');
   const [videoModel, setVideoModel] = useState<'veo-3' | 'omni'>('veo-3');
-  const [subtitlesEnabled, setSubtitlesEnabled] = useState(() => {
-    if (typeof window !== 'undefined') return localStorage.getItem('subtitles_enabled') !== 'false';
-    return true;
-  });
+  const [subtitlesEnabled, setSubtitlesEnabled] = useState(true);
   
   // App workflow state
   const [script, setScript] = useState<VideoScript | null>(null);
@@ -116,10 +95,29 @@ export default function Home() {
     }
   };
 
-  // Load API keys and voices on mount
+  // Sync localStorage → state after mount (client-only, avoids hydration mismatch)
   useEffect(() => {
-    const eKey = typeof window !== 'undefined' ? localStorage.getItem('elevenlabs_api_key') || '' : '';
+    setMounted(true);
+    const eKey = localStorage.getItem('elevenlabs_api_key') || '';
+    const gKey = localStorage.getItem('gemini_api_key') || '';
+    const bKey = localStorage.getItem('banana_api_key') || '';
+    const bUrl = localStorage.getItem('banana_api_url') || 'https://api.banana-pro.ai/v1/images/generate';
+    const flowExt = localStorage.getItem('use_flow_extension') === 'true';
+    const useEl = localStorage.getItem('use_elevenlabs') !== 'false';
+    const lVoice = localStorage.getItem('local_voice') || 'macos-linh';
+    const subs = localStorage.getItem('subtitles_enabled') !== 'false';
+
+    setGeminiApiKey(gKey);
+    setElevenLabsApiKey(eKey);
+    setBananaApiKey(bKey);
+    setBananaApiUrl(bUrl);
+    setUseFlowExtension(flowExt);
+    setUseElevenLabs(useEl);
+    setLocalVoice(lVoice);
+    setSubtitlesEnabled(subs);
+
     fetchVoices(eKey);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Poll local Flow extension bridge health
@@ -461,12 +459,12 @@ export default function Home() {
                         }}
                         style={{ opacity: 0, width: 0, height: 0 }}
                       />
-                      <span style={{
+                      <span suppressHydrationWarning style={{
                         position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
                         backgroundColor: useElevenLabs ? 'var(--primary)' : '#444',
                         borderRadius: '22px', transition: '0.3s'
                       }}>
-                        <span style={{
+                        <span suppressHydrationWarning style={{
                           position: 'absolute', height: '16px', width: '16px', left: useElevenLabs ? '22px' : '4px', bottom: '3px',
                           backgroundColor: 'white', borderRadius: '50%', transition: '0.3s'
                         }}/>
@@ -474,7 +472,13 @@ export default function Home() {
                     </label>
                   </div>
 
-                  {useElevenLabs ? (
+                  {!mounted ? (
+                    // Render stable placeholder before hydration to avoid mismatch
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label htmlFor="select-voice" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Chọn giọng đọc</label>
+                      <select id="select-voice" className="form-input" defaultValue="" disabled><option value="">Đang tải...</option></select>
+                    </div>
+                  ) : useElevenLabs ? (
                     <div className="form-group" style={{ margin: 0 }}>
                       <label htmlFor="select-voice" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Chọn giọng đọc ElevenLabs</label>
                       <select
@@ -525,12 +529,12 @@ export default function Home() {
                         }}
                         style={{ opacity: 0, width: 0, height: 0 }}
                       />
-                      <span style={{
+                      <span suppressHydrationWarning style={{
                         position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
                         backgroundColor: useFlowExtension ? 'var(--primary)' : '#444',
                         borderRadius: '22px', transition: '0.3s'
                       }}>
-                        <span style={{
+                        <span suppressHydrationWarning style={{
                           position: 'absolute', height: '16px', width: '16px', left: useFlowExtension ? '22px' : '4px', bottom: '3px',
                           backgroundColor: 'white', borderRadius: '50%', transition: '0.3s'
                         }}/>
@@ -582,12 +586,12 @@ export default function Home() {
                         }}
                         style={{ opacity: 0, width: 0, height: 0 }}
                       />
-                      <span style={{
+                      <span suppressHydrationWarning style={{
                         position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
                         backgroundColor: subtitlesEnabled ? 'var(--primary)' : '#444',
                         borderRadius: '22px', transition: '0.3s'
                       }}>
-                        <span style={{
+                        <span suppressHydrationWarning style={{
                           position: 'absolute', height: '16px', width: '16px', left: subtitlesEnabled ? '22px' : '4px', bottom: '3px',
                           backgroundColor: 'white', borderRadius: '50%', transition: '0.3s'
                         }}/>
@@ -595,7 +599,7 @@ export default function Home() {
                     </label>
                   </div>
                   
-                  <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
+                  <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }} suppressHydrationWarning>
                     {subtitlesEnabled ? (
                       <span style={{ color: 'var(--primary)', fontWeight: 'bold' }}>
                         ● Có phụ đề (Chữ trắng, nền đen mờ)
