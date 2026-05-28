@@ -7,6 +7,17 @@ import axios from 'axios';
 
 // Global reference for hot-reloads in Next.js dev mode
 const globalAny = global as any;
+const FLOW_API_HEADERS = {
+  'content-type': 'text/plain;charset=UTF-8',
+  accept: '*/*',
+  origin: 'https://labs.google',
+  referer: 'https://labs.google/',
+};
+const FLOW_TRPC_HEADERS = {
+  'content-type': 'application/json',
+  accept: '*/*',
+};
+const DEFAULT_PAYGATE_TIER = 'PAYGATE_TIER_ONE';
 
 export interface FlowUserInfo {
   email?: string;
@@ -278,8 +289,7 @@ class FlowBridge {
       url,
       method,
       headers: {
-        'content-type': 'text/plain;charset=UTF-8',
-        'accept': '*/*',
+        ...FLOW_API_HEADERS,
         ...headers
       },
       body
@@ -295,8 +305,7 @@ class FlowBridge {
       url,
       method,
       headers: {
-        'content-type': 'application/json',
-        'accept': '*/*',
+        ...FLOW_TRPC_HEADERS,
         ...headers
       },
       body
@@ -349,18 +358,39 @@ class FlowBridge {
     return mediaId;
   }
 
+  private createClientContext(projectId: string) {
+    return {
+      projectId,
+      recaptchaContext: {
+        applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB',
+        token: '',
+      },
+      sessionId: `;${Date.now()}`,
+      tool: 'PINHOLE',
+      userPaygateTier: DEFAULT_PAYGATE_TIER,
+    };
+  }
+
+  private resolveImageAspectRatio(aspectRatio: string): string {
+    if (aspectRatio === '9:16') return 'IMAGE_ASPECT_RATIO_PORTRAIT';
+    if (aspectRatio === '1:1') return 'IMAGE_ASPECT_RATIO_SQUARE';
+    if (aspectRatio === '3:4') return 'IMAGE_ASPECT_RATIO_PORTRAIT_THREE_FOUR';
+    return 'IMAGE_ASPECT_RATIO_LANDSCAPE';
+  }
+
+  private resolveVideoAspectRatio(aspectRatio: string): string {
+    if (aspectRatio === '9:16') return 'VIDEO_ASPECT_RATIO_PORTRAIT';
+    if (aspectRatio === '1:1') return 'VIDEO_ASPECT_RATIO_SQUARE';
+    if (aspectRatio === '3:4') return 'VIDEO_ASPECT_RATIO_PORTRAIT';
+    return 'VIDEO_ASPECT_RATIO_LANDSCAPE';
+  }
+
   public async genImage(prompt: string, projectId: string, aspectRatio = '16:9', refMediaIds: string[] = []): Promise<{ mediaId: string; url: string }> {
     const url = `https://aisandbox-pa.googleapis.com/v1/projects/${projectId}/flowMedia:batchGenerateImages`;
     const batchId = crypto.randomUUID();
     const seed = Math.floor(Math.random() * 1000000);
-    
-    const imageAspectRatio = aspectRatio === '9:16' 
-      ? 'IMAGE_ASPECT_RATIO_PORTRAIT' 
-      : aspectRatio === '1:1' 
-        ? 'IMAGE_ASPECT_RATIO_SQUARE'
-        : aspectRatio === '3:4' 
-          ? 'IMAGE_ASPECT_RATIO_PORTRAIT_THREE_FOUR'
-          : 'IMAGE_ASPECT_RATIO_LANDSCAPE';
+    const clientContext = this.createClientContext(projectId);
+    const imageAspectRatio = this.resolveImageAspectRatio(aspectRatio);
 
     const imageInputs = refMediaIds.length > 0
       ? refMediaIds.map(mid => ({
@@ -370,14 +400,12 @@ class FlowBridge {
       : undefined;
 
     const body = {
-      clientContext: {
-        projectId,
-        recaptchaContext: { token: '' } // solved by extension
-      },
+      clientContext,
       mediaGenerationContext: { batchId },
       useNewMedia: true,
       requests: [
         {
+          clientContext,
           seed,
           structuredPrompt: {
             parts: [{ text: prompt }]
@@ -438,23 +466,15 @@ class FlowBridge {
     const batchId = crypto.randomUUID();
     const sceneId = crypto.randomUUID();
     const seed = Math.floor(Math.random() * 1000000);
+    const clientContext = this.createClientContext(projectId);
 
     // Both Veo 3.1 variants use the same key in Flow
     const videoModelKey = 'veo_3_1_i2v_s_fast';
 
-    const videoAspectRatio = aspectRatio === '9:16'
-      ? 'VIDEO_ASPECT_RATIO_PORTRAIT'
-      : aspectRatio === '1:1'
-        ? 'VIDEO_ASPECT_RATIO_SQUARE'
-        : aspectRatio === '3:4'
-          ? 'VIDEO_ASPECT_RATIO_PORTRAIT' // Fallback to portrait for 3:4 video
-          : 'VIDEO_ASPECT_RATIO_LANDSCAPE';
+    const videoAspectRatio = this.resolveVideoAspectRatio(aspectRatio);
 
     const body = {
-      clientContext: {
-        projectId,
-        recaptchaContext: { token: '' } // solved by extension
-      },
+      clientContext,
       mediaGenerationContext: { batchId },
       requests: [
         {
@@ -473,7 +493,7 @@ class FlowBridge {
       useV2ModelConfig: true
     };
 
-    console.log(`[FlowBridge] Triggering video clip (${videoModelKey}) using image mediaId: ${startMediaId}...`);
+    console.log(`[FlowBridge] Triggering video clip (${modelName} -> ${videoModelKey}) using image mediaId: ${startMediaId}...`);
     const resp = await this.apiRequest(url, 'POST', {}, body, 'VIDEO_GENERATION');
 
     console.log('[FlowBridge] genVideo raw response:', JSON.stringify(resp)?.substring(0, 300));

@@ -5,7 +5,7 @@ export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   try {
-    const { imageBase64, mimeType, projectId } = await req.json();
+    const { imageBase64, mimeType, projectId, fileName } = await req.json();
 
     if (!imageBase64 || !mimeType || !projectId) {
       return NextResponse.json({ error: 'Missing imageBase64, mimeType, or projectId' }, { status: 400 });
@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    const mediaId = await FlowBridgeService.uploadImage(imageBase64, mimeType, projectId);
+    const mediaId = await FlowBridgeService.uploadImage(imageBase64, mimeType, projectId, fileName);
     return NextResponse.json({ success: true, mediaId });
   } catch (error: any) {
     console.error('API /api/flow/upload failed:', error);

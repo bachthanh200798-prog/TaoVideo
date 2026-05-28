@@ -412,45 +412,30 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function solveCaptchaDirectly(tabId, captchaAction) {
-  const SITE_KEY = '6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV';
-  
+async function requestCaptchaFromTab(tabId, requestId, pageAction) {
   try {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId },
-      world: 'MAIN',
-      func: async (siteKey, action) => {
-        const waitForGrecaptcha = (timeout = 25000) => {
-          return new Promise((resolve, reject) => {
-            const start = Date.now();
-            const check = () => {
-              if (window.grecaptcha?.enterprise?.execute) return resolve();
-              if (Date.now() - start > timeout) return reject(new Error('grecaptcha not available'));
-              setTimeout(check, 250);
-            };
-            check();
-          });
-        };
-
-        try {
-          await waitForGrecaptcha();
-          const token = await window.grecaptcha.enterprise.execute(siteKey, { action });
-          return { token };
-        } catch (e) {
-          return { error: e.message || 'GRECAPTCHA_EXECUTE_FAILED' };
-        }
-      },
-      args: [SITE_KEY, captchaAction]
+    return await chrome.tabs.sendMessage(tabId, {
+      type: 'GET_CAPTCHA',
+      requestId,
+      pageAction,
     });
+  } catch (error) {
+    const msg = error?.message || '';
+    const shouldInject =
+      msg.includes('Receiving end does not exist') ||
+      msg.includes('Could not establish connection');
+    if (!shouldInject) throw error;
 
-    const executionResult = results?.[0]?.result;
-    if (executionResult?.token) {
-      return { token: executionResult.token };
-    } else {
-      return { error: executionResult?.error || 'CAPTCHA_EXECUTION_EMPTY' };
-    }
-  } catch (err) {
-    return { error: err.message || 'SCRIPT_INJECTION_FAILED' };
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['content.js'],
+    });
+    await sleep(200);
+    return await chrome.tabs.sendMessage(tabId, {
+      type: 'GET_CAPTCHA',
+      requestId,
+      pageAction,
+    });
   }
 }
 
@@ -491,7 +476,7 @@ async function solveCaptcha(requestId, captchaAction) {
       }
       
       const resp = await Promise.race([
-        solveCaptchaDirectly(live.id, captchaAction),
+        requestCaptchaFromTab(live.id, requestId, captchaAction),
         new Promise((_, rej) => setTimeout(() => rej(new Error('CAPTCHA_TIMEOUT')), 50000)),
       ]);
       return resp;
@@ -523,7 +508,7 @@ async function solveCaptcha(requestId, captchaAction) {
     }
 
     const resp = await Promise.race([
-      solveCaptchaDirectly(target.id, captchaAction),
+      requestCaptchaFromTab(target.id, requestId, captchaAction),
       new Promise((_, rej) => setTimeout(() => rej(new Error('CAPTCHA_TIMEOUT')), 50000)),
     ]);
     return resp;

@@ -1,45 +1,52 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import {
+  BUSY_PIPELINE_STATES,
+  DEFAULT_BANANA_API_URL,
+  DEFAULT_LOCAL_VOICE,
+  DEFAULT_STORED_LOCAL_VOICE,
+  type ActiveTab,
+  type AspectRatio,
+  type ElevenLabsVoice,
+  type FlowBridgeStats,
+  type PipelineState,
+  type Scene,
+  type ScriptLanguage,
+  type VideoModel,
+  type VideoScript,
+  type VisualMode,
+} from './page-models';
+import { assertOkResponse, fileToBase64 } from './page-utils';
 
-interface Scene {
-  sceneNumber: number;
-  durationSeconds: number;
-  visualPrompt: string;
-  voiceoverText: string;
-  imagePath?: string;
-  mediaId?: string;
+interface ToggleSwitchProps {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+  description?: string;
 }
 
-interface VideoScript {
-  title: string;
-  targetAudience: string;
-  tone: string;
-  hook: string;
-  scenes: Scene[];
-  cta: string;
-}
+type SetupPanel = 'source' | 'character' | 'output' | 'flow';
 
-interface ElevenLabsVoice {
-  voice_id: string;
-  name: string;
-  category: string;
-  preview_url: string;
-}
-
-interface FlowBridgeStats {
-  connected: boolean;
-  flowKeyPresent: boolean;
-  tokenAgeS: number | null;
-  pendingRequests: number;
-  requestCount: number;
-  successCount: number;
-  failedCount: number;
-  lastError: string | null;
-  userInfo: {
-    email?: string;
-    name?: string;
-  } | null;
+function ToggleSwitch({ checked, onChange, label, description }: ToggleSwitchProps) {
+  return (
+    <label className="toggle-row">
+      <span className="toggle-copy">
+        <span className="toggle-title">{label}</span>
+        {description && <span className="toggle-description">{description}</span>}
+      </span>
+      <span className="toggle-control">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(event) => onChange(event.target.checked)}
+        />
+        <span className="toggle-track" aria-hidden="true">
+          <span className="toggle-thumb" />
+        </span>
+      </span>
+    </label>
+  );
 }
 
 export default function Home() {
@@ -47,14 +54,15 @@ export default function Home() {
   const [mounted, setMounted] = useState(false);
 
   // Tab control state
-  const [activeTab, setActiveTab] = useState<'direct' | 'competitor'>('direct');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('direct');
+  const [setupPanel, setSetupPanel] = useState<SetupPanel>('source');
 
   // Settings / API credentials state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [geminiApiKey, setGeminiApiKey] = useState('');
   const [elevenLabsApiKey, setElevenLabsApiKey] = useState('');
   const [bananaApiKey, setBananaApiKey] = useState('');
-  const [bananaApiUrl, setBananaApiUrl] = useState('https://api.banana-pro.ai/v1/images/generate');
+  const [bananaApiUrl, setBananaApiUrl] = useState(DEFAULT_BANANA_API_URL);
   const [useFlowExtension, setUseFlowExtension] = useState(false);
   const [extensionConnected, setExtensionConnected] = useState(false);
   const [extensionStats, setExtensionStats] = useState<FlowBridgeStats | null>(null);
@@ -67,14 +75,14 @@ export default function Home() {
   
   // Settings state — always init with stable defaults to avoid hydration mismatch
   const [useElevenLabs, setUseElevenLabs] = useState(true);
-  const [localVoice, setLocalVoice] = useState('macos-linh');
+  const [localVoice, setLocalVoice] = useState(DEFAULT_LOCAL_VOICE);
   const [voices, setVoices] = useState<ElevenLabsVoice[]>([]);
-  const [selectedVoice, setSelectedVoice] = useState('macos-linh');
-  const [visualMode, setVisualMode] = useState<'images' | 'video'>('video');
-  const [videoModel, setVideoModel] = useState<'veo-3' | 'omni'>('veo-3');
+  const [selectedVoice, setSelectedVoice] = useState(DEFAULT_LOCAL_VOICE);
+  const [visualMode, setVisualMode] = useState<VisualMode>('video');
+  const [videoModel, setVideoModel] = useState<VideoModel>('veo-3');
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(true);
-  const [scriptLanguage, setScriptLanguage] = useState<'vi' | 'en'>('vi');
-  const [aspectRatio, setAspectRatio] = useState<'9:16' | '16:9' | '3:4' | '1:1'>('9:16');
+  const [scriptLanguage, setScriptLanguage] = useState<ScriptLanguage>('vi');
+  const [aspectRatio, setAspectRatio] = useState<AspectRatio>('9:16');
   const [productImage, setProductImage] = useState<File | null>(null);
   const [productFlowMediaId, setProductFlowMediaId] = useState<string | null>(null);
   const [useCharacter, setUseCharacter] = useState(false);
@@ -88,6 +96,7 @@ export default function Home() {
   const [isUploadingProduct, setIsUploadingProduct] = useState(false);
   const [isGeneratingCharacter, setIsGeneratingCharacter] = useState(false);
   const [isRegeneratingScene, setIsRegeneratingScene] = useState<number | null>(null);
+  const [selectedSceneIndex, setSelectedSceneIndex] = useState(0);
   
   // App workflow state
   const [script, setScript] = useState<VideoScript | null>(null);
@@ -96,7 +105,7 @@ export default function Home() {
   const [competitorFlow, setCompetitorFlow] = useState<string | null>(null);
   
   // Loading & Progress state
-  const [pipelineState, setPipelineState] = useState<'idle' | 'scraping' | 'analyzing' | 'script-ready' | 'storyboard-ready' | 'media-generating' | 'compiling' | 'completed' | 'error'>('idle');
+  const [pipelineState, setPipelineState] = useState<PipelineState>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [compiledVideoUrl, setCompiledVideoUrl] = useState<string | null>(null);
   const [flowProjectId, setFlowProjectId] = useState<string | null>(null);
@@ -107,19 +116,16 @@ export default function Home() {
   const productImageInputRef = useRef<HTMLInputElement>(null);
   const charImageInputRef = useRef<HTMLInputElement>(null);
 
+  const ensureFlowProject = async (): Promise<string> => {
+    if (flowProjectId) return flowProjectId;
+    setProgressStatusText('Đang khởi tạo dự án mới trên Google Flow...');
+    return triggerCreateFlowProjectOnly();
+  };
+
   const uploadProductImageToFlow = async (file: File, activeProjectId: string) => {
     setIsUploadingProduct(true);
     try {
-      const reader = new FileReader();
-      const base64Promise = new Promise<string>((resolve) => {
-        reader.onload = () => {
-          const result = reader.result as string;
-          const base64 = result.split(',')[1];
-          resolve(base64);
-        };
-      });
-      reader.readAsDataURL(file);
-      const base64 = await base64Promise;
+      const base64 = await fileToBase64(file);
 
       const res = await fetch('/api/flow/upload', {
         method: 'POST',
@@ -127,14 +133,12 @@ export default function Home() {
         body: JSON.stringify({
           imageBase64: base64,
           mimeType: file.type,
-          projectId: activeProjectId
+          projectId: activeProjectId,
+          fileName: file.name
         })
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Failed to upload image');
-      }
+      await assertOkResponse(res, 'Failed to upload image');
 
       const data = await res.json();
       if (data.mediaId) {
@@ -147,6 +151,12 @@ export default function Home() {
     } finally {
       setIsUploadingProduct(false);
     }
+  };
+
+  const syncProductImageToFlow = async (file = productImage, force = false) => {
+    if (!file || (!force && productFlowMediaId)) return;
+    const activeProjectId = await ensureFlowProject();
+    await uploadProductImageToFlow(file, activeProjectId);
   };
 
   const handleGenerateCharacterPortrait = async () => {
@@ -172,10 +182,7 @@ export default function Home() {
         })
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Failed to generate character');
-      }
+      await assertOkResponse(res, 'Failed to generate character');
 
       const data = await res.json();
       if (data.mediaId && data.url) {
@@ -201,16 +208,7 @@ export default function Home() {
         activeProjId = await triggerCreateFlowProjectOnly();
       }
 
-      const reader = new FileReader();
-      const base64Promise = new Promise<string>((resolve) => {
-        reader.onload = () => {
-          const result = reader.result as string;
-          const base64 = result.split(',')[1];
-          resolve(base64);
-        };
-      });
-      reader.readAsDataURL(file);
-      const base64 = await base64Promise;
+      const base64 = await fileToBase64(file);
 
       const res = await fetch('/api/flow/upload', {
         method: 'POST',
@@ -218,14 +216,12 @@ export default function Home() {
         body: JSON.stringify({
           imageBase64: base64,
           mimeType: file.type,
-          projectId: activeProjId
+          projectId: activeProjId,
+          fileName: file.name
         })
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Failed to upload character portrait');
-      }
+      await assertOkResponse(res, 'Failed to upload character portrait');
 
       const data = await res.json();
       if (data.mediaId) {
@@ -271,13 +267,13 @@ export default function Home() {
     const eKey = localStorage.getItem('elevenlabs_api_key') || '';
     const gKey = localStorage.getItem('gemini_api_key') || '';
     const bKey = localStorage.getItem('banana_api_key') || '';
-    const bUrl = localStorage.getItem('banana_api_url') || 'https://api.banana-pro.ai/v1/images/generate';
+    const bUrl = localStorage.getItem('banana_api_url') || DEFAULT_BANANA_API_URL;
     const flowExt = localStorage.getItem('use_flow_extension') === 'true';
     const useEl = localStorage.getItem('use_elevenlabs') !== 'false';
-    const lVoice = localStorage.getItem('local_voice') || 'local-vietnamese';
+    const lVoice = localStorage.getItem('local_voice') || DEFAULT_STORED_LOCAL_VOICE;
     const subs = localStorage.getItem('subtitles_enabled') !== 'false';
-    const scriptLang = (localStorage.getItem('script_language') as 'vi' | 'en') || 'vi';
-    const aspect = (localStorage.getItem('aspect_ratio') as '9:16' | '16:9' | '3:4' | '1:1') || '9:16';
+    const scriptLang = (localStorage.getItem('script_language') as ScriptLanguage) || 'vi';
+    const aspect = (localStorage.getItem('aspect_ratio') as AspectRatio) || '9:16';
     const useChar = localStorage.getItem('use_character') === 'true';
     const charName = localStorage.getItem('character_name') || '';
     const charNationality = localStorage.getItem('character_nationality') || 'Việt Nam';
@@ -315,7 +311,6 @@ export default function Home() {
     if (charImgUrl) setCharacterImageUrl(charImgUrl);
 
     fetchVoices(eKey);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Poll local Flow extension bridge health
@@ -365,9 +360,14 @@ export default function Home() {
   // Run Step 1: Scrape & generate script
   const handleAnalyze = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!productUrl) return;
+    if (!productName.trim() || !productUrl.trim()) {
+      setSetupPanel('source');
+      setErrorMsg('Vui lòng nhập tên sản phẩm và link sản phẩm trước khi bắt đầu.');
+      return;
+    }
 
     if (activeTab === 'competitor' && !competitorFile && !competitorUrl) {
+      setSetupPanel('source');
       setErrorMsg('Vui lòng chọn 1 file video đối thủ tải lên hoặc dán đường dẫn link video đối thủ.');
       return;
     }
@@ -412,21 +412,20 @@ export default function Home() {
         body: formData,
       });
 
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || 'Quá trình phân tích sản phẩm thất bại.');
-      }
+      await assertOkResponse(res, 'Quá trình phân tích sản phẩm thất bại.');
 
       const data = await res.json();
       const targetScript = data.mode === 'adapted' ? data.analysis.adaptedScript : data.script;
 
       if (data.mode === 'adapted') {
         setScript(targetScript);
+        setSelectedSceneIndex(0);
         setCompetitorTranscript(data.analysis.transcript);
         setCompetitorHookType(data.analysis.hookType);
         setCompetitorFlow(data.analysis.flowStructure);
       } else {
         setScript(targetScript);
+        setSelectedSceneIndex(0);
         setCompetitorTranscript(null);
         setCompetitorHookType(null);
         setCompetitorFlow(null);
@@ -480,10 +479,7 @@ export default function Home() {
         })
       });
 
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || 'Tạo Storyboard thất bại.');
-      }
+      await assertOkResponse(res, 'Tạo Storyboard thất bại.');
 
       const data = await res.json();
       if (data.success && data.scenes) {
@@ -526,10 +522,7 @@ export default function Home() {
         })
       });
 
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || 'Tạo lại hình ảnh cảnh thất bại.');
-      }
+      await assertOkResponse(res, 'Tạo lại hình ảnh cảnh thất bại.');
 
       const data = await res.json();
       if (data.success && data.scenes && data.scenes.length > 0) {
@@ -573,10 +566,7 @@ export default function Home() {
         })
       });
       
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || 'Failed to create project');
-      }
+      await assertOkResponse(res, 'Failed to create project');
       
       const data = await res.json();
       if (data.projectId) {
@@ -626,10 +616,7 @@ export default function Home() {
         })
       });
 
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || 'Biên tập video thất bại.');
-      }
+      await assertOkResponse(res, 'Biên tập video thất bại.');
 
       setPipelineState('compiling');
       setProgressStatusText('Đang tiến hành ghép các cảnh âm thanh, hình ảnh và tạo phụ đề (FFmpeg)...');
@@ -674,22 +661,156 @@ export default function Home() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  const pipelineStepNumber: Record<PipelineState, number> = {
+    idle: 0,
+    scraping: 1,
+    analyzing: 2,
+    'script-ready': 3,
+    'storyboard-ready': 4,
+    'media-generating': 5,
+    compiling: 6,
+    completed: 7,
+    error: 0,
+  };
+  const readyReferenceCount = [productFlowMediaId, useCharacter ? characterFlowMediaId : null].filter(Boolean).length;
+  const flowHealthLabel = useFlowExtension
+    ? (extensionConnected ? 'Flow live' : 'Flow attention')
+    : 'Flow optional';
+  const activeSourceLabel = activeTab === 'competitor' ? 'Competitor remix' : 'Product direct';
+  const productionSteps = [
+    { state: 'idle', number: 1, title: 'Thiết lập đầu vào', detail: 'Sản phẩm, nguồn video, ảnh thật và nhân vật.' },
+    { state: 'analyzing', number: 2, title: 'AI viết kịch bản', detail: 'Cào dữ liệu, bóc băng đối thủ và tạo script.' },
+    { state: 'script-ready', number: 3, title: 'Duyệt kịch bản', detail: 'Sửa hook, CTA, lời thoại và prompt từng cảnh.' },
+    { state: 'storyboard-ready', number: 4, title: 'Storyboard', detail: 'Tạo, xem và tái tạo ảnh phác thảo từng cảnh.' },
+    { state: 'media-generating', number: 5, title: 'Tạo media', detail: 'Sinh voice, ảnh hoặc clip bằng Flow/Veo/Omni.' },
+    { state: 'compiling', number: 6, title: 'Render video', detail: 'Ghép cảnh, âm thanh, chuyển cảnh và phụ đề.' },
+    { state: 'completed', number: 7, title: 'Xuất bản', detail: 'Xem, tải video và mở dự án Flow.' },
+  ] as const;
+  const visibleStepNumber = Math.max(1, pipelineStepNumber[pipelineState] || 1);
+  const selectedScene = script?.scenes[selectedSceneIndex] ?? null;
+  const workbenchInspector = {
+    source: {
+      eyebrow: 'Input readiness',
+      title: 'Nguồn dữ liệu quyết định chất lượng video.',
+      body: 'Điền thông tin sản phẩm, thêm ảnh thật để giữ mẫu chính xác, và dùng competitor mode khi cần bóc cấu trúc bán hàng từ video đối thủ.',
+      checks: [
+        { label: 'Tên sản phẩm', done: Boolean(productName.trim()) },
+        { label: 'Link sản phẩm', done: Boolean(productUrl.trim()) },
+        { label: 'Ảnh sản phẩm thật', done: Boolean(productImage) },
+        { label: 'Nguồn đối thủ nếu dùng', done: activeTab !== 'competitor' || Boolean(competitorFile || competitorUrl) },
+      ],
+    },
+    character: {
+      eyebrow: 'Brand consistency',
+      title: 'Nhân vật đại diện giúp video nhất quán hơn.',
+      body: 'Bật character khi muốn MC xuất hiện xuyên suốt video. Có thể tạo chân dung bằng Flow hoặc upload ảnh chân dung riêng.',
+      checks: [
+        { label: 'Character mode', done: useCharacter },
+        { label: 'Giới tính/tuổi/quốc tịch', done: Boolean(characterGender && characterAge && characterNationality) },
+        { label: 'Chân dung Flow', done: Boolean(characterFlowMediaId || characterImageUrl) },
+      ],
+    },
+    output: {
+      eyebrow: 'Render configuration',
+      title: 'Đầu ra được tách riêng để chỉnh nhanh trước khi chạy.',
+      body: 'Chọn voice, subtitle, tỉ lệ khung hình và model tạo video. Các cấu hình này sẽ được gửi vào pipeline render.',
+      checks: [
+        { label: 'Voice mode', done: Boolean(useElevenLabs ? selectedVoice : localVoice) },
+        { label: 'Aspect ratio', done: Boolean(aspectRatio) },
+        { label: 'Visual mode', done: Boolean(visualMode) },
+        { label: 'Video model', done: visualMode === 'images' || Boolean(videoModel) },
+      ],
+    },
+    flow: {
+      eyebrow: 'Flow bridge',
+      title: 'Flow giữ reference sản phẩm và nhân vật.',
+      body: 'Bật extension để đẩy asset qua Google Flow. Nếu extension chưa kết nối, panel này sẽ hiển thị hướng dẫn cài đặt và trạng thái project.',
+      checks: [
+        { label: 'Extension enabled', done: useFlowExtension },
+        { label: 'Bridge connected', done: extensionConnected },
+        { label: 'Flow project', done: Boolean(flowProjectId) },
+        { label: 'Reference asset', done: readyReferenceCount > 0 },
+      ],
+    },
+  } satisfies Record<SetupPanel, {
+    eyebrow: string;
+    title: string;
+    body: string;
+    checks: Array<{ label: string; done: boolean }>;
+  }>;
+  const activeInspector = workbenchInspector[setupPanel];
+
   return (
-    <main className="app-container">
+    <main id="main-content" className="app-container">
       <header className="header">
-        <h1>AutoVideo.AI</h1>
-        <p>Hệ thống tự động hóa sản xuất Video từ kịch bản và sản phẩm trên macOS M1</p>
+        <div>
+          <span className="eyebrow">AI video production console</span>
+          <h1>AutoVideo.AI</h1>
+          <p>Hệ thống tự động hóa sản xuất Video từ kịch bản và sản phẩm trên macOS M1</p>
+        </div>
+        <div className="header-status" aria-label="Workspace status">
+          <span className={`status-pill ${extensionConnected ? 'success' : 'danger'}`}>
+            {extensionConnected ? 'Flow extension connected' : 'Flow extension offline'}
+          </span>
+          {flowProjectId && (
+            <span className="status-pill mono" title={flowProjectId}>
+              Project {flowProjectId.slice(0, 8)}
+            </span>
+          )}
+        </div>
       </header>
+
+      <section className="command-strip" aria-label="Production overview">
+        <div className="command-metric">
+          <span>Workflow</span>
+          <strong>{activeSourceLabel}</strong>
+        </div>
+        <div className="command-metric">
+          <span>Pipeline</span>
+          <strong>Step {pipelineStepNumber[pipelineState]}/7</strong>
+        </div>
+        <div className="command-metric">
+          <span>Reference assets</span>
+          <strong>{readyReferenceCount} ready</strong>
+        </div>
+        <div className="command-metric">
+          <span>Flow bridge</span>
+          <strong>{flowHealthLabel}</strong>
+        </div>
+      </section>
+
+      <section className="workflow-steps" aria-label="Production steps">
+        {productionSteps.map((step) => {
+          const isActive = step.number === visibleStepNumber;
+          const isDone = step.number < visibleStepNumber || pipelineState === 'completed';
+          return (
+            <div
+              key={step.number}
+              className={`workflow-step ${isActive ? 'active' : ''} ${isDone ? 'done' : ''}`}
+              aria-current={isActive ? 'step' : undefined}
+            >
+              <span className="workflow-step-index">{isDone ? '✓' : step.number}</span>
+              <div>
+                <strong>{step.title}</strong>
+                <p>{step.detail}</p>
+              </div>
+            </div>
+          );
+        })}
+      </section>
 
       <div className="grid-container">
         {/* Left Side: Configuration or Pipeline Status */}
-        <section>
+        <section className="workspace-column" aria-label="Production setup">
           {pipelineState === 'idle' || pipelineState === 'error' ? (
             <div className="card">
-              <div className="tabs-container">
+              <div className="tabs-container" role="tablist" aria-label="Production source">
                 <button
                   id="tab-direct"
                   type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'direct'}
+                  aria-controls="production-input-panel"
                   className={`tab-btn ${activeTab === 'direct' ? 'active' : ''}`}
                   onClick={() => {
                     setActiveTab('direct');
@@ -701,6 +822,9 @@ export default function Home() {
                 <button
                   id="tab-competitor"
                   type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'competitor'}
+                  aria-controls="production-input-panel"
                   className={`tab-btn ${activeTab === 'competitor' ? 'active' : ''}`}
                   onClick={() => {
                     setActiveTab('competitor');
@@ -711,7 +835,30 @@ export default function Home() {
                 </button>
               </div>
 
-              <form onSubmit={handleAnalyze}>
+              <form id="production-input-panel" role="tabpanel" aria-labelledby={activeTab === 'direct' ? 'tab-direct' : 'tab-competitor'} onSubmit={handleAnalyze}>
+                <div className="workbench-nav" role="tablist" aria-label="Workbench panels">
+                  {[
+                    { id: 'source', label: 'Nguồn dữ liệu', hint: productUrl ? 'Đã có link' : 'Cần link' },
+                    { id: 'character', label: 'Nhân vật', hint: useCharacter ? 'Đang bật' : 'Tùy chọn' },
+                    { id: 'output', label: 'Đầu ra', hint: `${aspectRatio} · ${visualMode === 'video' ? 'Clip' : 'Ảnh'}` },
+                    { id: 'flow', label: 'Flow', hint: useFlowExtension ? (extensionConnected ? 'Connected' : 'Cần kết nối') : 'Tắt' },
+                  ].map((panel) => (
+                    <button
+                      key={panel.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={setupPanel === panel.id}
+                      className={`workbench-tab ${setupPanel === panel.id ? 'active' : ''}`}
+                      onClick={() => setSetupPanel(panel.id as SetupPanel)}
+                    >
+                      <strong>{panel.label}</strong>
+                      <span>{panel.hint}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {setupPanel === 'source' && (
+                  <div className="workbench-panel">
                 <div className="form-group">
                   <label htmlFor="select-script-language">Ngôn ngữ kịch bản (Script Language)</label>
                   <select
@@ -766,23 +913,24 @@ export default function Home() {
                   />
                 </div>
 
-                <div className="form-group" style={{ marginTop: '1.25rem' }}>
+                <div className="form-group upload-section">
                   <label>Ảnh thực tế sản phẩm (Để giữ mẫu sản phẩm chính xác, không biến dạng)</label>
                   <div 
                     id="dropzone-product-image"
-                    className="file-upload"
+                    className="file-upload source-upload"
                     onClick={() => productImageInputRef.current?.click()}
-                    style={{ border: '2px dashed var(--card-border)', background: 'rgba(255, 255, 255, 0.01)' }}
                   >
                     <input
                       ref={productImageInputRef}
                       type="file"
                       accept="image/*"
-                      style={{ display: 'none' }}
+                      className="hidden-file-input"
                       onChange={async (e) => {
                         if (e.target.files && e.target.files[0]) {
                           const file = e.target.files[0];
                           setProductImage(file);
+                          setProductFlowMediaId(null);
+                          localStorage.removeItem('product_flow_media_id');
                           
                           if (useFlowExtension) {
                             try {
@@ -802,16 +950,16 @@ export default function Home() {
                       }}
                     />
                     {productImage ? (
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
-                        <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
+                      <div className="upload-selected">
+                        <span className="upload-selected-name">
                           ✓ {productImage.name} ({(productImage.size / 1024).toFixed(1)} KB)
                         </span>
                         {isUploadingProduct ? (
-                          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                            <span className="spinner" style={{ width: '12px', height: '12px' }} /> Đang đồng bộ lên Flow...
+                          <div className="upload-status">
+                            <span className="spinner spinner-xs" /> Đang đồng bộ lên Flow...
                           </div>
                         ) : productFlowMediaId ? (
-                          <div style={{ fontSize: '0.75rem', color: '#22c55e', fontWeight: 600 }}>
+                          <div className="upload-status success">
                             Đã khoá sản phẩm trên Flow (ID: {productFlowMediaId.substring(0, 8)}...)
                           </div>
                         ) : null}
@@ -819,65 +967,39 @@ export default function Home() {
                         <img
                           src={URL.createObjectURL(productImage)}
                           alt="Product preview"
-                          style={{ maxWidth: '120px', maxHeight: '120px', borderRadius: '6px', border: '1px solid var(--card-border)', objectFit: 'contain', marginTop: '0.25rem' }}
+                          className="upload-preview-img"
                         />
                       </div>
                     ) : (
                       <>
-                        <span style={{ fontSize: '1.5rem' }}>📸</span>
+                        <span className="upload-icon">📸</span>
                         <p>Kéo thả hoặc nhấp để tải lên ảnh sản phẩm (.jpg, .png)</p>
                       </>
                     )}
                   </div>
                 </div>
+                  </div>
+                )}
 
                 {/* Character Configuration Section */}
-                <div className="form-group" style={{ 
-                  background: 'rgba(255, 255, 255, 0.02)', 
-                  padding: '1.25rem', 
-                  borderRadius: '12px', 
-                  border: '1px solid var(--card-border)', 
-                  marginTop: '1.5rem',
-                  backdropFilter: 'blur(10px)',
-                  boxShadow: 'inset 0 1px 1px rgba(255,255,255,0.05)'
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                    <label style={{ margin: 0, fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.95rem', color: '#fff' }}>
-                      👤 Sử dụng nhân vật đại diện (Host/Character)
-                    </label>
-                    <label style={{ position: 'relative', display: 'inline-block', width: '42px', height: '22px', cursor: 'pointer' }}>
-                      <input 
-                        type="checkbox" 
-                        checked={useCharacter} 
-                        onChange={(e) => {
-                          const val = e.target.checked;
-                          setUseCharacter(val);
-                          localStorage.setItem('use_character', String(val));
-                        }}
-                        style={{ opacity: 0, width: 0, height: 0 }}
-                      />
-                      <span suppressHydrationWarning style={{
-                        position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-                        backgroundColor: useCharacter ? 'var(--primary)' : '#444',
-                        borderRadius: '22px', transition: '0.3s'
-                      }}>
-                        <span suppressHydrationWarning style={{
-                          position: 'absolute', height: '16px', width: '16px', left: useCharacter ? '22px' : '4px', bottom: '3px',
-                          backgroundColor: 'white', borderRadius: '50%', transition: '0.3s'
-                        }}/>
-                      </span>
-                    </label>
-                  </div>
-                  
-                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: '0 0 1rem 0', lineHeight: '1.4' }}>
-                    Định hình nhân vật dẫn chuyện (MC) xuất hiện xuyên suốt video giúp tạo dựng niềm tin và sự nhất quán hình ảnh thương hiệu.
-                  </p>
+                {setupPanel === 'character' && (
+                  <div className="workbench-panel">
+                <div className="form-group section-panel">
+                  <ToggleSwitch
+                    checked={useCharacter}
+                    onChange={(val) => {
+                      setUseCharacter(val);
+                      localStorage.setItem('use_character', String(val));
+                    }}
+                    label="👤 Sử dụng nhân vật đại diện (Host/Character)"
+                    description="Định hình MC xuất hiện xuyên suốt video để giữ nhận diện hình ảnh."
+                  />
 
                   {useCharacter && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.5rem' }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                        <div className="form-group" style={{ margin: 0 }}>
-                          <label htmlFor="select-character-gender" style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600, display: 'block', marginBottom: '0.4rem' }}>Giới tính</label>
+                    <div className="character-form">
+                      <div className="field-grid">
+                        <div className="form-group compact">
+                          <label htmlFor="select-character-gender">Giới tính</label>
                           <select
                             id="select-character-gender"
                             className="form-input"
@@ -886,7 +1008,6 @@ export default function Home() {
                               setCharacterGender(e.target.value);
                               localStorage.setItem('character_gender', e.target.value);
                             }}
-                            style={{ width: '100%' }}
                           >
                             <option value="Nữ">Nữ (Female)</option>
                             <option value="Nam">Nam (Male)</option>
@@ -894,8 +1015,8 @@ export default function Home() {
                           </select>
                         </div>
 
-                        <div className="form-group" style={{ margin: 0 }}>
-                          <label htmlFor="select-character-age" style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600, display: 'block', marginBottom: '0.4rem' }}>Độ tuổi</label>
+                        <div className="form-group compact">
+                          <label htmlFor="select-character-age">Độ tuổi</label>
                           <select
                             id="select-character-age"
                             className="form-input"
@@ -904,7 +1025,6 @@ export default function Home() {
                               setCharacterAge(e.target.value);
                               localStorage.setItem('character_age', e.target.value);
                             }}
-                            style={{ width: '100%' }}
                           >
                             <option value="18-24">18-24 tuổi</option>
                             <option value="25-30">25-30 tuổi</option>
@@ -914,8 +1034,8 @@ export default function Home() {
                         </div>
                       </div>
 
-                      <div className="form-group" style={{ margin: 0 }}>
-                        <label htmlFor="select-character-nationality" style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600, display: 'block', marginBottom: '0.4rem' }}>Quốc tịch / Sắc tộc</label>
+                      <div className="form-group compact">
+                        <label htmlFor="select-character-nationality">Quốc tịch / Sắc tộc</label>
                         <select
                           id="select-character-nationality"
                           className="form-input"
@@ -924,7 +1044,6 @@ export default function Home() {
                             setCharacterNationality(e.target.value);
                             localStorage.setItem('character_nationality', e.target.value);
                           }}
-                          style={{ width: '100%' }}
                         >
                           <option value="Việt Nam">Việt Nam (Vietnamese)</option>
                           <option value="Châu Á">Châu Á (Asian)</option>
@@ -935,60 +1054,57 @@ export default function Home() {
                       </div>
 
                       {/* Chân dung MC preview & buttons */}
-                      <div className="form-group" style={{ margin: '0.5rem 0 0 0', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '0.75rem' }}>
-                        <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600, display: 'block', marginBottom: '0.4rem' }}>Chân dung MC trên Google Flow</label>
+                      <div className="form-group compact character-portrait-section">
+                        <label>Chân dung MC trên Google Flow</label>
                         
                         {characterImageUrl ? (
-                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', padding: '0.75rem', background: 'rgba(0,0,0,0.15)', borderRadius: '8px', border: '1px solid var(--card-border)' }}>
+                          <div className="portrait-card">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img 
                               src={characterImageUrl} 
                               alt="MC Portrait preview" 
-                              style={{ width: '90px', height: '120px', objectFit: 'cover', borderRadius: '6px', border: '1px solid var(--card-border)' }}
+                              className="portrait-img"
                             />
-                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', wordBreak: 'break-all', textAlign: 'center' }}>
+                            <div className="portrait-id">
                               ID: <code>{characterFlowMediaId}</code>
                             </div>
                             <button
                               type="button"
-                              className="btn btn-secondary btn-sm"
+                              className="btn btn-secondary btn-sm btn-compact"
                               onClick={() => {
                                 setCharacterFlowMediaId(null);
                                 setCharacterImageUrl(null);
                                 localStorage.removeItem('character_flow_media_id');
                                 localStorage.removeItem('character_image_url');
                               }}
-                              style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem', marginTop: '0.25rem' }}
                             >
                               ✕ Xoá chân dung
                             </button>
                           </div>
                         ) : (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          <div className="portrait-actions">
                             <button
                               type="button"
-                              className="btn btn-secondary btn-sm"
+                              className="btn btn-secondary btn-sm full-width-btn"
                               disabled={isGeneratingCharacter}
                               onClick={handleGenerateCharacterPortrait}
-                              style={{ width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.25rem', background: 'rgba(255, 255, 255, 0.05)' }}
                             >
                               {isGeneratingCharacter ? (
                                 <>
-                                  <span className="spinner" style={{ width: '12px', height: '12px' }} /> Đang tạo chân dung...
+                                  <span className="spinner spinner-xs" /> Đang tạo chân dung...
                                 </>
                               ) : (
                                 <>✨ Tạo chân dung MC trên Flow</>
                               )}
                             </button>
 
-                            <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.7rem' }}>hoặc</div>
+                            <div className="muted-separator compact">hoặc</div>
 
                             <button
                               type="button"
-                              className="btn btn-secondary btn-sm"
+                              className="btn btn-secondary btn-sm full-width-btn subtle-btn"
                               disabled={isGeneratingCharacter}
                               onClick={() => charImageInputRef.current?.click()}
-                              style={{ width: '100%', background: 'rgba(255, 255, 255, 0.02)' }}
                             >
                               📁 Tải ảnh chân dung của bạn
                             </button>
@@ -996,7 +1112,7 @@ export default function Home() {
                               ref={charImageInputRef}
                               type="file"
                               accept="image/*"
-                              style={{ display: 'none' }}
+                              className="hidden-file-input"
                               onChange={(e) => {
                                 if (e.target.files && e.target.files[0]) {
                                   handleUploadCharacterPortrait(e.target.files[0]);
@@ -1009,9 +1125,12 @@ export default function Home() {
                     </div>
                   )}
                 </div>
+                  </div>
+                )}
 
                 {activeTab === 'competitor' && (
-                  <div className="form-group" style={{ marginTop: '1.5rem', borderTop: '1px solid var(--card-border)', paddingTop: '1.5rem' }}>
+                setupPanel === 'source' && (
+                  <div className="form-group divider-section">
                     <label>Video của đối thủ cần bóc băng và phân tích</label>
                     <input
                       id="input-competitor-url"
@@ -1025,7 +1144,7 @@ export default function Home() {
                       }}
                     />
                     
-                    <div style={{ margin: '0.75rem 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>hoặc</div>
+                    <div className="muted-separator">hoặc</div>
 
                     <div 
                       id="dropzone-competitor-file"
@@ -1036,66 +1155,153 @@ export default function Home() {
                         ref={fileInputRef}
                         type="file"
                         accept="video/*"
-                        style={{ display: 'none' }}
+                        className="hidden-file-input"
                         onChange={handleFileChange}
                       />
                       {competitorFile ? (
-                        <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
+                        <span className="upload-selected-name">
                           ✓ {competitorFile.name} ({(competitorFile.size / 1024 / 1024).toFixed(2)} MB)
                         </span>
                       ) : (
                         <>
-                          <span style={{ fontSize: '1.5rem' }}>📁</span>
+                          <span className="upload-icon">📁</span>
                           <p>Kéo thả hoặc nhấp để tải lên tệp video đối thủ (.mp4, .mov)</p>
                         </>
                       )}
                     </div>
                   </div>
+                )
                 )}
 
-                {/* Pipeline Settings */}
-                <h3 style={{ margin: '2rem 0 1rem', fontSize: '1.1rem', borderBottom: '1px solid var(--card-border)', paddingBottom: '0.5rem' }}>
+                {setupPanel === 'flow' && (
+                  <div className="workbench-panel">
+                <div className="form-group section-panel">
+                  <ToggleSwitch
+                    checked={useFlowExtension}
+                    onChange={(val) => {
+                      setUseFlowExtension(val);
+                      localStorage.setItem('use_flow_extension', String(val));
+                      if (val) {
+                        void syncProductImageToFlow().catch((err: any) => {
+                          setErrorMsg(err.message);
+                        });
+                      }
+                    }}
+                    label="🌐 Sử dụng Google Flow Extension"
+                    description="Đẩy ảnh sản phẩm, nhân vật và media qua Flow để giữ reference."
+                  />
+                  
+                  <div className="flow-panel">
+                    <div className="flow-status-row">
+                      <span>Trạng thái</span>
+                      {extensionConnected ? (
+                        <strong className="connected">
+                          ● Đã kết nối {extensionStats?.userInfo?.email ? `(${extensionStats.userInfo.email})` : ''}
+                        </strong>
+                      ) : (
+                        <strong className="disconnected">
+                          ○ Chưa kết nối
+                        </strong>
+                      )}
+                    </div>
+                    
+                    {!extensionConnected && useFlowExtension && (
+                      <div className="flow-help">
+                        <p>Hướng dẫn cài đặt Extension:</p>
+                        <ol>
+                          <li>Mở <code>chrome://extensions/</code> trên Chrome.</li>
+                          <li>Bật <b>Developer mode</b> ở góc trên bên phải.</li>
+                          <li>Chọn <b>Load unpacked</b> và tìm đến thư mục <code>public/extension</code> trong thư mục dự án này.</li>
+                          <li>Mở tab <a href="https://labs.google/fx/tools/flow" target="_blank" rel="noreferrer">labs.google/fx/tools/flow</a> và đăng nhập tài khoản Google.</li>
+                        </ol>
+                      </div>
+                    )}
+
+                    {useFlowExtension && (
+                      <div className="flow-project-section">
+                        {flowProjectId ? (
+                          <div className="flow-project-card">
+                            <span>Dự án đang liên kết</span>
+                            <strong>{flowProjectTitle}</strong>
+                            <div>
+                              <code>{flowProjectId}</code>
+                              <button
+                                type="button"
+                                className="btn btn-danger btn-sm"
+                                onClick={() => {
+                                  setFlowProjectId(null);
+                                  setFlowProjectTitle(null);
+                                  setProductFlowMediaId(null);
+                                  setCharacterFlowMediaId(null);
+                                  setCharacterImageUrl(null);
+                                  localStorage.removeItem('flow_project_id');
+                                  localStorage.removeItem('flow_project_title');
+                                  localStorage.removeItem('product_flow_media_id');
+                                  localStorage.removeItem('character_flow_media_id');
+                                  localStorage.removeItem('character_image_url');
+                                }}
+                              >
+                                ✕ Giải phóng
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flow-empty">
+                            <p>
+                              Chưa liên kết dự án nào. Một dự án sẽ được tạo tự động khi bạn upload sản phẩm hoặc bắt đầu sản xuất.
+                            </p>
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={async () => {
+                                try {
+                                  setProgressStatusText('Đang khởi tạo dự án mới trên Google Flow...');
+                                  const activeProjectId = await triggerCreateFlowProjectOnly();
+                                  if (productImage && !productFlowMediaId) {
+                                    await uploadProductImageToFlow(productImage, activeProjectId);
+                                  }
+                                } catch (err: any) {
+                                  setErrorMsg(err.message);
+                                }
+                              }}
+                            >
+                              ➕ Khởi tạo dự án mới trên Flow
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                  </div>
+                )}
+
+                {setupPanel === 'output' && (
+                  <div className="workbench-panel">
+                <h3 className="section-heading">
                   ⚙️ Cấu Hình Đầu Ra
                 </h3>
 
-                <div className="form-group" style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--card-border)', margin: '1rem 0' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                    <label style={{ margin: 0, fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}>
-                      🎙️ Sử dụng giọng đọc AI ElevenLabs
-                    </label>
-                    <label style={{ position: 'relative', display: 'inline-block', width: '42px', height: '22px', cursor: 'pointer' }}>
-                      <input 
-                        type="checkbox" 
-                        checked={useElevenLabs} 
-                        onChange={(e) => {
-                          const val = e.target.checked;
-                          setUseElevenLabs(val);
-                          localStorage.setItem('use_elevenlabs', String(val));
-                        }}
-                        style={{ opacity: 0, width: 0, height: 0 }}
-                      />
-                      <span suppressHydrationWarning style={{
-                        position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-                        backgroundColor: useElevenLabs ? 'var(--primary)' : '#444',
-                        borderRadius: '22px', transition: '0.3s'
-                      }}>
-                        <span suppressHydrationWarning style={{
-                          position: 'absolute', height: '16px', width: '16px', left: useElevenLabs ? '22px' : '4px', bottom: '3px',
-                          backgroundColor: 'white', borderRadius: '50%', transition: '0.3s'
-                        }}/>
-                      </span>
-                    </label>
-                  </div>
+                <div className="form-group section-panel">
+                  <ToggleSwitch
+                    checked={useElevenLabs}
+                    onChange={(val) => {
+                      setUseElevenLabs(val);
+                      localStorage.setItem('use_elevenlabs', String(val));
+                    }}
+                    label="🎙️ Sử dụng giọng đọc AI ElevenLabs"
+                    description="Bật để dùng voice AI, tắt để dùng giọng máy nội bộ."
+                  />
 
                   {!mounted ? (
                     // Render stable placeholder before hydration to avoid mismatch
-                    <div className="form-group" style={{ margin: 0 }}>
-                      <label htmlFor="select-voice" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Chọn giọng đọc</label>
+                    <div className="form-group compact">
+                      <label htmlFor="select-voice">Chọn giọng đọc</label>
                       <select id="select-voice" className="form-input" defaultValue="" disabled><option value="">Đang tải...</option></select>
                     </div>
                   ) : useElevenLabs ? (
-                    <div className="form-group" style={{ margin: 0 }}>
-                      <label htmlFor="select-voice" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Chọn giọng đọc ElevenLabs</label>
+                    <div className="form-group compact">
+                      <label htmlFor="select-voice">Chọn giọng đọc ElevenLabs</label>
                       <select
                         id="select-voice"
                         className="form-input"
@@ -1110,8 +1316,8 @@ export default function Home() {
                       </select>
                     </div>
                   ) : (
-                    <div className="form-group" style={{ margin: 0 }}>
-                      <label htmlFor="select-local-voice" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Chọn giọng máy nội bộ (Miễn phí)</label>
+                    <div className="form-group compact">
+                      <label htmlFor="select-local-voice">Chọn giọng máy nội bộ (Miễn phí)</label>
                       <select
                         id="select-local-voice"
                         className="form-input"
@@ -1139,159 +1345,25 @@ export default function Home() {
                     </div>
                   )}
                 </div>
-                <div className="form-group" style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--card-border)', margin: '1.5rem 0' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <label style={{ margin: 0, fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}>
-                      🌐 Sử dụng Google Flow Extension
-                    </label>
-                    <label style={{ position: 'relative', display: 'inline-block', width: '42px', height: '22px', cursor: 'pointer' }}>
-                      <input 
-                        type="checkbox" 
-                        checked={useFlowExtension} 
-                        onChange={(e) => {
-                          const val = e.target.checked;
-                          setUseFlowExtension(val);
-                          localStorage.setItem('use_flow_extension', String(val));
-                        }}
-                        style={{ opacity: 0, width: 0, height: 0 }}
-                      />
-                      <span suppressHydrationWarning style={{
-                        position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-                        backgroundColor: useFlowExtension ? 'var(--primary)' : '#444',
-                        borderRadius: '22px', transition: '0.3s'
-                      }}>
-                        <span suppressHydrationWarning style={{
-                          position: 'absolute', height: '16px', width: '16px', left: useFlowExtension ? '22px' : '4px', bottom: '3px',
-                          backgroundColor: 'white', borderRadius: '50%', transition: '0.3s'
-                        }}/>
-                      </span>
-                    </label>
-                  </div>
-                  
-                  <div style={{ marginTop: '0.75rem', fontSize: '0.85rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>Trạng thái:</span>
-                      {extensionConnected ? (
-                        <span style={{ color: '#22c55e', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                          ● Đã kết nối {extensionStats?.userInfo?.email ? `(${extensionStats.userInfo.email})` : ''}
-                        </span>
-                      ) : (
-                        <span style={{ color: '#ef4444', fontWeight: 'bold' }}>
-                          ○ Chưa kết nối
-                        </span>
-                      )}
-                    </div>
-                    
-                    {!extensionConnected && useFlowExtension && (
-                      <div style={{ marginTop: '0.75rem', background: 'rgba(239, 68, 68, 0.05)', padding: '0.75rem', borderRadius: '6px', border: '1px solid rgba(239, 68, 68, 0.15)', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                        <p style={{ fontWeight: 'bold', color: 'var(--danger)', marginBottom: '0.25rem' }}>Hướng dẫn cài đặt Extension:</p>
-                        <ol style={{ marginLeft: '1.25rem', paddingLeft: 0, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                          <li>Mở <code>chrome://extensions/</code> trên Chrome.</li>
-                          <li>Bật <b>Developer mode</b> ở góc trên bên phải.</li>
-                          <li>Chọn <b>Load unpacked</b> và tìm đến thư mục <code>public/extension</code> trong thư mục dự án này.</li>
-                          <li>Mở tab <a href="https://labs.google/fx/tools/flow" target="_blank" rel="noreferrer" style={{ color: 'var(--primary)', textDecoration: 'underline' }}>labs.google/fx/tools/flow</a> và đăng nhập tài khoản Google.</li>
-                        </ol>
-                      </div>
-                    )}
 
-                    {useFlowExtension && (
-                      <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px dashed var(--card-border)' }}>
-                        {flowProjectId ? (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'rgba(255,255,255,0.02)', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--card-border)' }}>
-                            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                              Dự án đang liên kết:
-                            </div>
-                            <div style={{ fontSize: '0.85rem', fontWeight: 'bold', color: '#fff', wordBreak: 'break-all' }}>
-                              {flowProjectTitle}
-                            </div>
-                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                              <code style={{ fontSize: '0.75rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: 'rgba(0,0,0,0.3)', color: '#ccc', wordBreak: 'break-all' }}>
-                                {flowProjectId}
-                              </code>
-                              <button
-                                type="button"
-                                className="btn btn-secondary btn-sm"
-                                onClick={() => {
-                                  setFlowProjectId(null);
-                                  setFlowProjectTitle(null);
-                                  setProductFlowMediaId(null);
-                                  setCharacterFlowMediaId(null);
-                                  setCharacterImageUrl(null);
-                                  localStorage.removeItem('flow_project_id');
-                                  localStorage.removeItem('flow_project_title');
-                                  localStorage.removeItem('product_flow_media_id');
-                                  localStorage.removeItem('character_flow_media_id');
-                                  localStorage.removeItem('character_image_url');
-                                }}
-                                style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem', marginLeft: 'auto', background: 'rgba(239, 68, 68, 0.2)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#ff8888' }}
-                              >
-                                ✕ Giải phóng
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                              Chưa liên kết dự án nào. Một dự án sẽ được tạo tự động khi bạn upload sản phẩm hoặc bắt đầu sản xuất.
-                            </div>
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-sm"
-                              onClick={async () => {
-                                try {
-                                  setProgressStatusText('Đang khởi tạo dự án mới trên Google Flow...');
-                                  await triggerCreateFlowProjectOnly();
-                                } catch (err: any) {
-                                  setErrorMsg(err.message);
-                                }
-                              }}
-                              style={{ width: '100%', fontSize: '0.8rem', background: 'rgba(255, 255, 255, 0.05)' }}
-                            >
-                              ➕ Khởi tạo dự án mới trên Flow
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="form-group" style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--card-border)', margin: '1.5rem 0' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <label style={{ margin: 0, fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}>
-                      💬 Chèn phụ đề lên video
-                    </label>
-                    <label style={{ position: 'relative', display: 'inline-block', width: '42px', height: '22px', cursor: 'pointer' }}>
-                      <input 
-                        type="checkbox" 
-                        checked={subtitlesEnabled} 
-                        onChange={(e) => {
-                          const val = e.target.checked;
-                          setSubtitlesEnabled(val);
-                          localStorage.setItem('subtitles_enabled', String(val));
-                        }}
-                        style={{ opacity: 0, width: 0, height: 0 }}
-                      />
-                      <span suppressHydrationWarning style={{
-                        position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-                        backgroundColor: subtitlesEnabled ? 'var(--primary)' : '#444',
-                        borderRadius: '22px', transition: '0.3s'
-                      }}>
-                        <span suppressHydrationWarning style={{
-                          position: 'absolute', height: '16px', width: '16px', left: subtitlesEnabled ? '22px' : '4px', bottom: '3px',
-                          backgroundColor: 'white', borderRadius: '50%', transition: '0.3s'
-                        }}/>
-                      </span>
-                    </label>
-                  </div>
+                <div className="form-group section-panel">
+                  <ToggleSwitch
+                    checked={subtitlesEnabled}
+                    onChange={(val) => {
+                      setSubtitlesEnabled(val);
+                      localStorage.setItem('subtitles_enabled', String(val));
+                    }}
+                    label="💬 Chèn phụ đề lên video"
+                    description="Tự động render subtitle vào video thành phẩm."
+                  />
                   
-                  <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }} suppressHydrationWarning>
+                  <div className="setting-status-line" suppressHydrationWarning>
                     {subtitlesEnabled ? (
-                      <span style={{ color: 'var(--primary)', fontWeight: 'bold' }}>
+                      <span className="enabled">
                         ● Có phụ đề (Chữ trắng, nền đen mờ)
                       </span>
                     ) : (
-                      <span style={{ color: 'var(--text-secondary)' }}>
+                      <span>
                         ○ Không phụ đề
                       </span>
                     )}
@@ -1301,29 +1373,33 @@ export default function Home() {
                 <div className="form-group">
                   <label>Định dạng hình ảnh đầu ra</label>
                   <div className="radio-group">
-                    <div
+                    <button
                       id="opt-visual-video"
+                      type="button"
                       className={`radio-card ${visualMode === 'video' ? 'active' : ''}`}
                       onClick={() => setVisualMode('video')}
+                      aria-pressed={visualMode === 'video'}
                     >
                       <span>🎞️</span>
                       <div>
-                        <strong style={{ display: 'block', fontSize: '0.9rem' }}>Video clip</strong>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Sinh clip ngắn cho từng cảnh</span>
+                        <strong>Video clip</strong>
+                        <span>Sinh clip ngắn cho từng cảnh</span>
                       </div>
-                    </div>
+                    </button>
 
-                    <div
+                    <button
                       id="opt-visual-images"
+                      type="button"
                       className={`radio-card ${visualMode === 'images' ? 'active' : ''}`}
                       onClick={() => setVisualMode('images')}
+                      aria-pressed={visualMode === 'images'}
                     >
                       <span>🖼️</span>
                       <div>
-                        <strong style={{ display: 'block', fontSize: '0.9rem' }}>Ảnh tĩnh</strong>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Tạo ảnh rồi pan/zoom bằng FFmpeg</span>
+                        <strong>Ảnh tĩnh</strong>
+                        <span>Tạo ảnh rồi pan/zoom bằng FFmpeg</span>
                       </div>
-                    </div>
+                    </button>
                   </div>
                 </div>
 
@@ -1349,46 +1425,57 @@ export default function Home() {
                 <div className="form-group">
                   <label>Mô hình tạo Video</label>
                   <div className="radio-group">
-                    <div 
+                    <button
                       id="opt-video-veo"
+                      type="button"
                       className={`radio-card ${videoModel === 'veo-3' ? 'active' : ''}`}
                       onClick={() => setVideoModel('veo-3')}
+                      aria-pressed={videoModel === 'veo-3'}
                     >
                       <span>🎬</span>
                       <div>
-                        <strong style={{ display: 'block', fontSize: '0.9rem' }}>Veo 3.1</strong>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Độ chi tiết điện ảnh</span>
+                        <strong>Veo 3.1</strong>
+                        <span>Độ chi tiết điện ảnh</span>
                       </div>
-                    </div>
+                    </button>
                     
-                    <div 
+                    <button
                       id="opt-video-omni"
+                      type="button"
                       className={`radio-card ${videoModel === 'omni' ? 'active' : ''}`}
                       onClick={() => setVideoModel('omni')}
+                      aria-pressed={videoModel === 'omni'}
                     >
                       <span>⚡</span>
                       <div>
-                        <strong style={{ display: 'block', fontSize: '0.9rem' }}>Gemini Omni</strong>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Chuyển động nhanh</span>
+                        <strong>Gemini Omni</strong>
+                        <span>Chuyển động nhanh</span>
                       </div>
-                    </div>
+                    </button>
                   </div>
                 </div>
+                  </div>
+                )}
 
                 {errorMsg && (
-                  <div style={{ color: 'var(--danger)', fontSize: '0.9rem', margin: '1rem 0', fontWeight: 'bold' }}>
+                  <div className="error-alert" role="alert">
                     ⚠ Lỗi: {errorMsg}
                   </div>
                 )}
 
-                <button 
-                  id="btn-submit-analyze"
-                  type="submit" 
-                  className="btn btn-primary"
-                  style={{ marginTop: '1.5rem' }}
-                >
-                  <span>⚡ Bắt Đầu Sản Xuất Video</span>
-                </button>
+                <div className="workbench-action-bar">
+                  <div>
+                    <strong>Sẵn sàng tạo kịch bản</strong>
+                    <span>Kiểm tra nhanh các panel, sau đó bắt đầu pipeline tự động.</span>
+                  </div>
+                  <button
+                    id="btn-submit-analyze"
+                    type="submit"
+                    className="btn btn-primary workbench-submit"
+                  >
+                    <span>⚡ Bắt Đầu Sản Xuất Video</span>
+                  </button>
+                </div>
               </form>
             </div>
           ) : (
@@ -1396,8 +1483,8 @@ export default function Home() {
             <div className="card">
               <h2 className="card-title">⚙️ Tiến Trình Sản Xuất</h2>
               
-              <div style={{ margin: '1.5rem 0', padding: '1rem', background: 'rgba(0, 0, 0, 0.2)', borderRadius: '8px', borderLeft: '3px solid var(--primary)' }}>
-                <p style={{ fontSize: '0.95rem', fontWeight: 600 }}>{progressStatusText}</p>
+              <div className="run-status" role="status" aria-live="polite">
+                <p>{progressStatusText}</p>
               </div>
 
               <div className="progress-list">
@@ -1475,7 +1562,7 @@ export default function Home() {
               </div>
 
               {errorMsg && (
-                <div style={{ color: 'var(--danger)', fontSize: '0.9rem', marginTop: '1.5rem', fontWeight: 'bold' }}>
+                <div className="error-alert" role="alert">
                   ⚠ Lỗi: {errorMsg}
                 </div>
               )}
@@ -1484,27 +1571,59 @@ export default function Home() {
         </section>
 
         {/* Right Side: Script Editor & Player Preview */}
-        <section>
+        <section className="workspace-column workspace-column-main" aria-label="Production output">
+          {!competitorTranscript && !script && pipelineState !== 'completed' && (
+            <div className="card empty-state">
+              <span className="eyebrow">{activeInspector.eyebrow}</span>
+              <h2>{activeInspector.title}</h2>
+              <p>
+                {activeInspector.body}
+              </p>
+              <ul className="inspector-checklist" aria-label="Panel readiness">
+                {activeInspector.checks.map((item) => (
+                  <li key={item.label} className={item.done ? 'done' : ''}>
+                    <span>{item.done ? '✓' : '○'}</span>
+                    <strong>{item.label}</strong>
+                  </li>
+                ))}
+              </ul>
+              <div className="empty-state-grid">
+                <div>
+                  <strong>Next</strong>
+                  <span>Hoàn tất panel hiện tại rồi chuyển sang panel kế tiếp trong workbench.</span>
+                </div>
+                <div>
+                  <strong>Review</strong>
+                  <span>Sau khi AI tạo script, cột này sẽ chuyển thành khu vực duyệt nội dung.</span>
+                </div>
+                <div>
+                  <strong>Export</strong>
+                  <span>Video hoàn chỉnh, link tải và project Flow sẽ xuất hiện ở đây.</span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Competitor Analysis Report */}
           {competitorTranscript && (
-            <div className="card" style={{ marginBottom: '2rem' }}>
+            <div className="card">
               <h2 className="card-title">📊 Kết Quả Bóc Băng Đối Thủ</h2>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', fontSize: '0.9rem' }}>
-                <div>
-                  <strong style={{ color: 'var(--primary)' }}>Cấu trúc dòng chảy đối thủ:</strong>
-                  <p style={{ background: 'rgba(255, 255, 255, 0.02)', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--card-border)', marginTop: '0.25rem' }}>
+              <div className="report-grid">
+                <div className="report-tile">
+                  <strong>Cấu trúc dòng chảy đối thủ</strong>
+                  <p>
                     {competitorFlow}
                   </p>
                 </div>
-                <div>
-                  <strong style={{ color: 'var(--warning)' }}>Kiểu Hook của đối thủ:</strong>
-                  <p style={{ background: 'rgba(255, 255, 255, 0.02)', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--card-border)', marginTop: '0.25rem' }}>
+                <div className="report-tile">
+                  <strong>Kiểu Hook của đối thủ</strong>
+                  <p>
                     {competitorHookType}
                   </p>
                 </div>
-                <div>
-                  <strong style={{ color: 'var(--text-secondary)' }}>Nội dung nguyên bản thoại:</strong>
-                  <p style={{ background: 'rgba(255, 255, 255, 0.02)', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--card-border)', marginTop: '0.25rem', maxHeight: '150px', overflowY: 'auto' }}>
+                <div className="report-tile report-tile-wide">
+                  <strong>Nội dung nguyên bản thoại</strong>
+                  <p className="scroll-text">
                     {competitorTranscript}
                   </p>
                 </div>
@@ -1518,21 +1637,10 @@ export default function Home() {
               <h2 className="card-title">📝 Kịch Bản Được Đề Xuất</h2>
 
               {pipelineState === 'script-ready' && (
-                <div className="review-banner" style={{
-                  padding: '1rem',
-                  borderRadius: '8px',
-                  background: 'rgba(234, 179, 8, 0.1)',
-                  border: '1px solid rgba(234, 179, 8, 0.2)',
-                  color: '#fbbf24',
-                  fontSize: '0.9rem',
-                  marginBottom: '1.5rem',
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: '0.5rem'
-                }}>
-                  <span style={{ fontSize: '1.2rem', lineHeight: '1' }}>⚠️</span>
+                <div className="review-banner">
+                  <span className="review-banner-icon">⚠️</span>
                   <div>
-                    <strong style={{ color: '#fbbf24' }}>Yêu cầu phê duyệt:</strong> Vui lòng rà soát lời thoại {scriptLanguage === 'en' ? 'tiếng Anh' : 'tiếng Việt'} và prompt thiết kế hình ảnh của từng cảnh dưới đây. Bạn có thể tự do chỉnh sửa bất kỳ nội dung nào. Sau khi hoàn tất, hãy kéo xuống cuối trang và nhấn nút <strong>🎬 Duyệt Kịch Bản & Render Video</strong> để bắt đầu quá trình sản xuất.
+                    <strong>Yêu cầu phê duyệt:</strong> Vui lòng rà soát lời thoại {scriptLanguage === 'en' ? 'tiếng Anh' : 'tiếng Việt'} và prompt thiết kế hình ảnh của từng cảnh dưới đây. Bạn có thể tự do chỉnh sửa bất kỳ nội dung nào. Sau khi hoàn tất, hãy kéo xuống cuối trang và nhấn nút <strong>🎬 Duyệt Kịch Bản & Render Video</strong> để bắt đầu quá trình sản xuất.
                   </div>
                 </div>
               )}
@@ -1546,7 +1654,7 @@ export default function Home() {
                     className="form-input"
                     value={script.title}
                     onChange={(e) => setScript({ ...script, title: e.target.value })}
-                    disabled={['scraping', 'analyzing', 'media-generating', 'compiling'].includes(pipelineState)}
+                    disabled={BUSY_PIPELINE_STATES.includes(pipelineState)}
                   />
                 </div>
 
@@ -1558,82 +1666,88 @@ export default function Home() {
                     rows={2}
                     value={script.hook}
                     onChange={(e) => setScript({ ...script, hook: e.target.value })}
-                    disabled={['scraping', 'analyzing', 'media-generating', 'compiling'].includes(pipelineState)}
+                    disabled={BUSY_PIPELINE_STATES.includes(pipelineState)}
                   />
                 </div>
 
-                {script.scenes.map((scene, idx) => (
-                  <div key={idx} className="scene-block">
-                    <div className="scene-header">
-                      <span>CẢNH {scene.sceneNumber || (idx + 1)}</span>
-                      <span>{scene.durationSeconds} giây</span>
+                {selectedScene && (
+                  <div className="scene-workbench">
+                    <div className="scene-nav" aria-label="Scenes">
+                      {script.scenes.map((scene, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          className={`scene-nav-item ${selectedSceneIndex === idx ? 'active' : ''}`}
+                          onClick={() => setSelectedSceneIndex(idx)}
+                          aria-current={selectedSceneIndex === idx ? 'true' : undefined}
+                        >
+                          <span>Cảnh {scene.sceneNumber || (idx + 1)}</span>
+                          <strong>{scene.durationSeconds}s</strong>
+                          <small>{scene.imagePath ? 'Storyboard ready' : 'Prompt only'}</small>
+                        </button>
+                      ))}
                     </div>
 
-                    <div className="form-group">
-                      <label htmlFor={`scene-${idx}-prompt`}>Prompt thiết kế hình ảnh (Banana Pro/Veo)</label>
-                      <textarea
-                        id={`scene-${idx}-prompt`}
-                        className="form-input"
-                        style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }}
-                        rows={2}
-                        value={scene.visualPrompt}
-                        onChange={(e) => handleSceneChange(idx, 'visualPrompt', e.target.value)}
-                        disabled={['scraping', 'analyzing', 'media-generating', 'compiling'].includes(pipelineState)}
-                      />
-                    </div>
+                    <div className="scene-detail">
+                      <div className="scene-header">
+                        <span>CẢNH {selectedScene.sceneNumber || (selectedSceneIndex + 1)}</span>
+                        <span>{selectedScene.durationSeconds} giây</span>
+                      </div>
 
-                    {scene.imagePath && (
-                      <div className="form-group" style={{ marginTop: '0.5rem', marginBottom: '1rem', position: 'relative' }}>
-                        <label>Hình ảnh phác thảo (Storyboard Image)</label>
-                        <div style={{ position: 'relative', width: '100%', maxHeight: '240px', overflow: 'hidden', borderRadius: '8px', border: '1px solid var(--card-border)' }}>
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={scene.imagePath}
-                            alt={`Storyboard scene ${idx + 1}`}
-                            style={{ width: '100%', height: 'auto', maxHeight: '240px', objectFit: 'contain' }}
-                          />
-                          {isRegeneratingScene === idx && (
-                            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.9rem', fontWeight: 'bold' }}>
-                              🔄 Đang tạo lại ảnh...
-                            </div>
+                      <div className="form-group">
+                        <label htmlFor={`scene-${selectedSceneIndex}-prompt`}>Prompt thiết kế hình ảnh (Banana Pro/Veo)</label>
+                        <textarea
+                          id={`scene-${selectedSceneIndex}-prompt`}
+                          className="form-input mono-input"
+                          rows={4}
+                          value={selectedScene.visualPrompt}
+                          onChange={(e) => handleSceneChange(selectedSceneIndex, 'visualPrompt', e.target.value)}
+                          disabled={BUSY_PIPELINE_STATES.includes(pipelineState)}
+                        />
+                      </div>
+
+                      {selectedScene.imagePath && (
+                        <div className="form-group">
+                          <label>Hình ảnh phác thảo (Storyboard Image)</label>
+                          <div className="storyboard-preview">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={selectedScene.imagePath}
+                              alt={`Storyboard scene ${selectedSceneIndex + 1}`}
+                            />
+                            {isRegeneratingScene === selectedSceneIndex && (
+                              <div className="storyboard-overlay">
+                                🔄 Đang tạo lại ảnh...
+                              </div>
+                            )}
+                          </div>
+                          {pipelineState === 'storyboard-ready' && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary scene-action"
+                              onClick={() => handleRegenerateSceneImage(selectedSceneIndex)}
+                              disabled={isRegeneratingScene !== null}
+                            >
+                              🔄 Tạo lại ảnh cảnh này
+                            </button>
                           )}
                         </div>
-                        {pipelineState === 'storyboard-ready' && (
-                          <button
-                            type="button"
-                            className="btn"
-                            style={{ 
-                              marginTop: '0.5rem', 
-                              padding: '0.4rem 0.8rem', 
-                              fontSize: '0.8rem', 
-                              background: 'rgba(255,255,255,0.05)', 
-                              color: '#fff',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '0.25rem'
-                            }}
-                            onClick={() => handleRegenerateSceneImage(idx)}
-                            disabled={isRegeneratingScene !== null}
-                          >
-                            🔄 Tạo lại ảnh cảnh này
-                          </button>
-                        )}
-                      </div>
-                    )}
+                      )}
 
-                    <div className="form-group">
-                      <label htmlFor={`scene-${idx}-voice`}>Lời thoại lồng tiếng ({scriptLanguage === 'en' ? 'Tiếng Anh' : 'Tiếng Việt'})</label>
-                      <textarea
-                        id={`scene-${idx}-voice`}
-                        className="form-input"
-                        rows={2}
-                        value={scene.voiceoverText}
-                        onChange={(e) => handleSceneChange(idx, 'voiceoverText', e.target.value)}
-                        disabled={['scraping', 'analyzing', 'media-generating', 'compiling'].includes(pipelineState)}
-                      />
+                      <div className="form-group">
+                        <label htmlFor={`scene-${selectedSceneIndex}-voice`}>Lời thoại lồng tiếng ({scriptLanguage === 'en' ? 'Tiếng Anh' : 'Tiếng Việt'})</label>
+                        <textarea
+                          id={`scene-${selectedSceneIndex}-voice`}
+                          className="form-input"
+                          rows={4}
+                          value={selectedScene.voiceoverText}
+                          onChange={(e) => handleSceneChange(selectedSceneIndex, 'voiceoverText', e.target.value)}
+                          disabled={BUSY_PIPELINE_STATES.includes(pipelineState)}
+                        />
+                      </div>
                     </div>
                   </div>
-                ))}
+                )}
 
                 <div className="form-group">
                   <label htmlFor="script-input-cta">Lời kêu gọi CTA (Kết thúc)</label>
@@ -1643,53 +1757,59 @@ export default function Home() {
                     className="form-input"
                     value={script.cta}
                     onChange={(e) => setScript({ ...script, cta: e.target.value })}
-                    disabled={['scraping', 'analyzing', 'media-generating', 'compiling'].includes(pipelineState)}
+                    disabled={BUSY_PIPELINE_STATES.includes(pipelineState)}
                   />
                 </div>
 
-                {!['scraping', 'analyzing', 'media-generating', 'compiling'].includes(pipelineState) && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1.5rem' }}>
+                {!BUSY_PIPELINE_STATES.includes(pipelineState) && (
+                  <div className="review-action-bar">
                     {pipelineState === 'script-ready' && (
                       <>
-                        <button 
-                          type="button"
-                          className="btn btn-primary"
-                          onClick={handleGenerateStoryboard}
-                          style={{ width: '100%', padding: '1rem', fontSize: '1.05rem', fontWeight: 'bold', background: 'var(--accent)' }}
-                        >
-                          <span>🎨 Bước 1: Tạo Storyboard (Ảnh cảnh)</span>
-                        </button>
-                        
-                        <button 
-                          type="button"
-                          className="btn"
-                          onClick={handleCompile}
-                          style={{ width: '100%', padding: '0.75rem', fontSize: '0.95rem', background: 'rgba(255,255,255,0.05)', color: '#ccc' }}
-                        >
-                          <span>⚡ Render Video trực tiếp (Bỏ qua Storyboard)</span>
-                        </button>
+                        <div className="review-action-copy">
+                          <strong>Duyệt kịch bản trước khi tạo hình.</strong>
+                          <span>Tạo storyboard để xem từng cảnh, hoặc render trực tiếp nếu không cần bước duyệt ảnh.</span>
+                        </div>
+                        <div className="review-action-buttons">
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-accent"
+                            onClick={handleGenerateStoryboard}
+                          >
+                            <span>🎨 Tạo Storyboard</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={handleCompile}
+                          >
+                            <span>⚡ Render trực tiếp</span>
+                          </button>
+                        </div>
                       </>
                     )}
 
                     {pipelineState === 'storyboard-ready' && (
                       <>
-                        <button 
-                          type="button"
-                          className="btn btn-primary"
-                          onClick={handleCompile}
-                          style={{ width: '100%', padding: '1rem', fontSize: '1.05rem', fontWeight: 'bold' }}
-                        >
-                          <span>🎬 Bước 2: Duyệt Storyboard & Render Video</span>
-                        </button>
-                        
-                        <button 
-                          type="button"
-                          className="btn"
-                          onClick={() => setPipelineState('script-ready')}
-                          style={{ width: '100%', padding: '0.75rem', fontSize: '0.95rem', background: 'rgba(255,255,255,0.05)', color: '#ccc' }}
-                        >
-                          <span>✏️ Sửa Lại Lời Thoại / Prompt Kịch Bản</span>
-                        </button>
+                        <div className="review-action-copy">
+                          <strong>Storyboard đã sẵn sàng để render.</strong>
+                          <span>Duyệt ảnh từng cảnh bằng navigator, tái tạo ảnh nếu cần, rồi render video hoàn chỉnh.</span>
+                        </div>
+                        <div className="review-action-buttons">
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={handleCompile}
+                          >
+                            <span>🎬 Render Video</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={() => setPipelineState('script-ready')}
+                          >
+                            <span>✏️ Sửa script</span>
+                          </button>
+                        </div>
                       </>
                     )}
                   </div>
@@ -1700,40 +1820,29 @@ export default function Home() {
 
           {/* Render Completed Screen */}
           {pipelineState === 'completed' && compiledVideoUrl && (
-            <div className="card">
+            <div className="card export-panel">
               <div className="success-banner">
-                <h3 style={{ color: 'var(--accent)', fontWeight: 800 }}>✓ ĐÃ HOÀN THÀNH VIDEO</h3>
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Video được xử lý và lưu hoàn chỉnh.</p>
+                <h3>✓ ĐÃ HOÀN THÀNH VIDEO</h3>
+                <p>Video được xử lý và lưu hoàn chỉnh.</p>
               </div>
 
               {flowProjectId && (
-                <div style={{
-                  marginBottom: '1.25rem',
-                  padding: '1rem',
-                  borderRadius: '12px',
-                  background: 'rgba(34, 197, 94, 0.08)',
-                  border: '1px solid rgba(34, 197, 94, 0.15)',
-                  fontSize: '0.9rem',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.4rem',
-                  backdropFilter: 'blur(10px)',
-                  textAlign: 'left'
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#22c55e', fontWeight: 600 }}>
-                    <span style={{ fontSize: '1.1rem' }}>✦</span>
-                    <span>Đã tự động tạo dự án riêng trên Google Flow</span>
+                <div className="flow-summary">
+                  <div className="flow-summary-title">
+                    <span>✦</span>
+                    <strong>Đã tự động tạo dự án riêng trên Google Flow</strong>
                   </div>
-                  <div style={{ color: 'var(--text-secondary)', paddingLeft: '1.6rem' }}>
-                    Tên dự án: <strong style={{ color: '#fff' }}>{flowProjectTitle}</strong>
+                  <div className="flow-summary-row">
+                    <span>Tên dự án</span>
+                    <strong>{flowProjectTitle}</strong>
                   </div>
-                  <div style={{ color: 'var(--text-secondary)', paddingLeft: '1.6rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center', marginTop: '0.2rem' }}>
-                    <span>ID:</span> <code style={{ background: 'rgba(0,0,0,0.3)', padding: '0.1rem 0.4rem', borderRadius: '4px', fontSize: '0.8rem', color: '#ccc', wordBreak: 'break-all' }}>{flowProjectId}</code>
+                  <div className="flow-summary-row flow-summary-row-wrap">
+                    <span>ID</span>
+                    <code>{flowProjectId}</code>
                     <a
                       href="https://labs.google/fx/tools/flow"
                       target="_blank"
                       rel="noopener noreferrer"
-                      style={{ color: 'var(--primary)', textDecoration: 'none', fontSize: '0.8rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.2rem', marginLeft: 'auto' }}
                     >
                       Mở Google Flow ↗
                     </a>
@@ -1749,21 +1858,20 @@ export default function Home() {
                 autoPlay
               />
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '1.5rem' }}>
+              <div className="export-actions">
                 <a 
                   id="link-download-video"
                   href={compiledVideoUrl} 
                   download 
                   className="btn btn-primary"
-                  style={{ textDecoration: 'none' }}
                 >
                   📥 Tải Video Xuống
                 </a>
                 <button 
                   id="btn-recreate-video"
                   className="btn" 
-                  style={{ background: 'rgba(255,255,255,0.05)', color: '#fff' }}
                   onClick={handleReset}
+                  type="button"
                 >
                   Tạo Video Khác
                 </button>
@@ -1789,7 +1897,11 @@ export default function Home() {
         <div className="modal-overlay" onClick={() => setIsSettingsOpen(false)}>
           <div className="settings-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>🔑 Cấu Hình API Keys</h3>
+              <div>
+                <span className="eyebrow">System credentials</span>
+                <h3>🔑 Cấu Hình API Keys</h3>
+                <p>Khai báo key một lần để pipeline AI, voice và image generation hoạt động.</p>
+              </div>
               <button 
                 id="btn-settings-close"
                 className="close-btn" 
@@ -1800,9 +1912,10 @@ export default function Home() {
               </button>
             </div>
             
-            <form onSubmit={handleSaveSettings}>
-              <div className="form-group">
+            <form className="settings-form" onSubmit={handleSaveSettings}>
+              <div className="settings-field">
                 <label htmlFor="settings-gemini-key">Gemini API Key</label>
+                <p>Phân tích sản phẩm, bóc băng đối thủ và viết kịch bản.</p>
                 <input
                   id="settings-gemini-key"
                   type="password"
@@ -1813,8 +1926,9 @@ export default function Home() {
                 />
               </div>
 
-              <div className="form-group">
+              <div className="settings-field">
                 <label htmlFor="settings-elevenlabs-key">ElevenLabs API Key</label>
+                <p>Tạo voiceover chất lượng cao nếu bật ElevenLabs.</p>
                 <input
                   id="settings-elevenlabs-key"
                   type="password"
@@ -1825,8 +1939,9 @@ export default function Home() {
                 />
               </div>
 
-              <div className="form-group">
+              <div className="settings-field">
                 <label htmlFor="settings-banana-key">Banana Pro API Key</label>
+                <p>Tạo ảnh tĩnh và storyboard khi không dùng Flow/Veo.</p>
                 <input
                   id="settings-banana-key"
                   type="password"
@@ -1837,8 +1952,9 @@ export default function Home() {
                 />
               </div>
 
-              <div className="form-group">
+              <div className="settings-field">
                 <label htmlFor="settings-banana-url">Banana Pro API URL</label>
+                <p>Endpoint mặc định cho Banana Pro image generation.</p>
                 <input
                   id="settings-banana-url"
                   type="text"
@@ -1849,14 +1965,22 @@ export default function Home() {
                 />
               </div>
 
-              <button 
-                id="btn-settings-save"
-                type="submit" 
-                className="btn btn-primary" 
-                style={{ marginTop: '1rem' }}
-              >
-                Lưu cấu hình
-              </button>
+              <div className="modal-action-bar">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setIsSettingsOpen(false)}
+                >
+                  Hủy
+                </button>
+                <button
+                  id="btn-settings-save"
+                  type="submit"
+                  className="btn btn-primary"
+                >
+                  Lưu cấu hình
+                </button>
+              </div>
             </form>
           </div>
         </div>
