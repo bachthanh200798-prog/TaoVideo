@@ -363,7 +363,7 @@ export const MediaService = {
         '-loop', '1',
         '-i', tempImgPath,
         '-vf', "scale=1920:1080,zoompan=z='zoom+0.001':d=100:s=1920x1080",
-        '-c:v', 'libx264',
+        '-c:v', 'h264_videotoolbox',
         '-t', '4',
         '-pix_fmt', 'yuv420p',
         outputPath,
