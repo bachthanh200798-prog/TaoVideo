@@ -577,6 +577,14 @@ class FlowBridge {
 // Ensure the server runs as a singleton across Next.js dev reloads
 if (!globalAny.flowBridgeInstance) {
   globalAny.flowBridgeInstance = new FlowBridge();
+} else {
+  // Hot-reload support: Copy any new/updated prototype methods to the existing singleton instance
+  const proto = FlowBridge.prototype;
+  for (const key of Object.getOwnPropertyNames(proto)) {
+    if (key !== 'constructor' && typeof (proto as any)[key] === 'function') {
+      globalAny.flowBridgeInstance[key] = (proto as any)[key].bind(globalAny.flowBridgeInstance);
+    }
+  }
 }
 
 export const FlowBridgeService = globalAny.flowBridgeInstance as FlowBridge;
